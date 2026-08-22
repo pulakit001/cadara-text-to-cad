@@ -558,7 +558,9 @@ svg {
 }
 
 #provider-select,
-#model-select {
+#model-select,
+#texture-provider-select,
+#texture-model-select {
   max-width: 160px;
   min-width: 60px;
   border: 1px solid rgba(255, 255, 255, 0.06);
@@ -576,7 +578,9 @@ svg {
 }
 
 #provider-select:hover,
-#model-select:hover {
+#model-select:hover,
+#texture-provider-select:hover,
+#texture-model-select:hover {
   background: rgba(255, 255, 255, 0.08);
   border-color: rgba(255, 255, 255, 0.15);
   color: #fff;
@@ -1769,7 +1773,9 @@ svg {
   }
 
   #provider-select,
-  #model-select {
+  #model-select,
+  #texture-provider-select,
+  #texture-model-select {
     width: 100%;
     max-width: none;
     height: 32px;

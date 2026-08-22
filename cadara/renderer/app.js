@@ -327,7 +327,7 @@ function init() {
   viewer = createViewer(viewerEl);
   renderPreviousChats();
 
-  cadara.meta().then((m) => {
+  Promise.all([cadara.meta(), cadara.settings.getKeys()]).then(([m, keys]) => {
     meta = m;
     modelsRoot = m.modelsRoot;
     let updatedCatalog = false;
@@ -347,10 +347,11 @@ function init() {
     }
     populateProviderControls(currentProvider());
     populateTextureModels(els.textureProviderSelect.value);
-  });
 
-  cadara.settings.getKeys().then((keys) => {
-    hasKey = Object.values(keys).some(providerKeys => providerKeys.some(k => k.active));
+    const hasLocalKey = Object.values(keys).some(providerKeys => providerKeys.some(k => k.active));
+    const hasEnvKey = Object.values(m.providers || {}).some(info => info.hasKey);
+    hasKey = hasLocalKey || hasEnvKey;
+    
     if (!hasKey) {
       addMessage("system", "Welcome! Add an API key via the ⚙ button to get started.");
     } else {
@@ -1199,7 +1200,6 @@ els.newChatBtn.addEventListener("click", async () => {
   await cadara.session.clear();
   clearActiveDesignView({ clearTranscript: true });
   if (hasKey) showSuggestions();
-  addMessage("system", "New design session - describe a fresh part. Use + whenever you want to stop editing the previous part.", { record: false });
   els.prompt.focus();
 });
 
