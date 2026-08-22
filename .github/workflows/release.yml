@@ -56,14 +56,32 @@ jobs:
       # relocatable by design.
       - name: Download standalone Python runtime
         shell: bash
+        env:
+          # python-build-standalone release tag; bump freely — the exact
+          # cpython-3.12 asset is resolved at run time from the release API,
+          # so asset-name changes can't break the build.
+          PBS_TAG: "20260814"
         run: |
           case "${{ matrix.artifact }}" in
             mac-arm64) TRIPLE="aarch64-apple-darwin" ;;
             mac-x64)   TRIPLE="x86_64-apple-darwin" ;;
-            win-x64)   TRIPLE="x86_64-pc-windows-msvc-shared" ;;
+            win-x64)   TRIPLE="x86_64-pc-windows-msvc" ;;
           esac
-          PBS_VERSION="20240107"
-          curl -fL "https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_VERSION}/cpython-3.12+${TRIPLE}-install_only.tar.gz" -o python-dist.tar.gz
+          ASSET_URL=$(curl -sfL "https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/${PBS_TAG}" | python3 -c "
+import json, sys
+tag = '${PBS_TAG}'.strip()
+triple = '${TRIPLE}'.strip()
+data = json.load(sys.stdin)
+for asset in data.get('assets', []):
+    name = asset['name']
+    if name.startswith('cpython-3.12') and name.endswith(f'+{tag}-{triple}-install_only.tar.gz'):
+        print(asset['browser_download_url'])
+        break
+else:
+    sys.exit('No matching cpython-3.12 install_only asset for ' + triple)
+")
+          echo "Downloading $ASSET_URL"
+          curl -fL "$ASSET_URL" -o python-dist.tar.gz
           mkdir -p cad-runtime/python-dist
           tar -xzf python-dist.tar.gz -C cad-runtime/python-dist --strip-components=1
           rm -f python-dist.tar.gz
