@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' cadarafile:" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
+  <title>Cadara</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <!--
+  THESIS: Cadara is a CAD instrument cockpit, not a chat dashboard; it refuses the old stacked cards and top-bar chrome.
+  OWN-WORLD: absolute black rail, graphite panels, hairline dividers, measured type, compact instrument controls, one green run signal.
+  STORY: the user specifies a part, watches the agent convert intent into geometry, then inspects and exports the part.
+  FIRST VIEWPORT: left icon rail, narrow command column with title/pipeline/chat, bottom floating composer, right full-height CAD canvas.
+  FORM: assigned grounded direction 4; seed 70a80838; code-led build from screenshot-inspired operating console.
+  FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
+  -->
+
+  <!-- Landing Page -->
+  <div id="landing-page" class="landing-page">
+    <div class="landing-background"></div>
+    <div class="landing-content">
+      <div class="landing-hero">
+        <h1 class="landing-title">
+          <span class="welcome-text">Welcome to</span>
+          <svg class="landing-logo" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+            <path d="M4 4h16v16" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M4 12v8h8L4 12z" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          <span class="brand-text">Cadara</span>
+        </h1>
+      </div>
+      <button id="start-designing-btn" class="landing-btn">Start designing</button>
+    </div>
+    <div class="landing-footer">Design in words</div>
+  </div>
+
+  <!-- Onboarding Tour -->
+  <div id="tour-overlay" class="tour-overlay" hidden>
+    <div class="tour-backdrop"></div>
+    <div id="tour-spotlight" class="tour-spotlight"></div>
+    <div id="tour-tooltip" class="tour-tooltip">
+      <div class="tour-step-badge"><span id="tour-step-num">1</span> / <span id="tour-step-total">5</span></div>
+      <h3 id="tour-title" class="tour-title"></h3>
+      <p id="tour-desc" class="tour-desc"></p>
+      <div class="tour-actions">
+        <button id="tour-skip" class="tour-skip-btn">Skip tour</button>
+        <button id="tour-next" class="tour-next-btn">Next</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="workbench">
+    <aside class="rail" aria-label="Workspace controls">
+      <div class="rail-top">
+        <button id="new-chat-btn" class="rail-btn" type="button" title="New design session" aria-label="New design session">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+        </button>
+        <button id="history-btn" class="rail-btn" type="button" title="Previous designs" aria-label="Previous designs">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h7l2 2h7v10H4z"/><path d="M8 13h8"/></svg>
+        </button>
+      </div>
+      <div class="rail-bottom">
+        <button id="settings-btn" class="rail-btn" type="button" title="Settings" aria-label="Settings">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7Z"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14.2 3h-4.4l-.3 2.7a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.4-1a7 7 0 0 0 2 1.2l.3 2.7h4.4l.3-2.7a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2Z"/></svg>
+        </button>
+        <button class="rail-btn" type="button" title="Help" aria-label="Help">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 9a2.6 2.6 0 0 1 5 1c0 2-2.5 2.2-2.5 4"/><path d="M12 18h.01"/><circle cx="12" cy="12" r="9"/></svg>
+        </button>
+      </div>
+    </aside>
+
+    <main class="workspace">
+      <section class="command-pane" aria-label="Part design command pane">
+        <header class="pane-head">
+          <div>
+            <h1>Design a part</h1>
+            <p id="status-line">Ready for geometry</p>
+          </div>
+          <span id="iter-chip" class="chip" hidden></span>
+        </header>
+
+        <div id="suggestions" class="suggestions" hidden></div>
+
+        <div id="history-popover" class="history-popover" hidden>
+          <div class="popover-head">
+            <span>Previous designs</span>
+            <button id="history-clear-btn" class="text-btn" type="button">Clear</button>
+          </div>
+          <div id="history-list" class="history-list"></div>
+        </div>
+
+        <div id="agent-trace" class="agent-trace" hidden>
+          <div class="trace-header">
+            <div class="trace-title">Agent pipeline</div>
+            <div class="trace-timer" id="trace-total-timer">0.0s</div>
+          </div>
+
+          <div id="agent-list" class="agent-list"></div>
+        </div>
+
+        <div id="chat" class="chat"></div>
+
+        <form id="prompt-form" class="prompt-form">
+          <div id="reference-uploader" class="reference-uploader">
+            <input id="reference-input" type="file" accept="image/png,image/jpeg,image/webp" hidden />
+            <div id="reference-preview" class="reference-preview" hidden>
+              <img
+                id="reference-thumb"
+                alt="Reference image preview"
+                src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw=="
+              />
+              <div class="reference-copy">
+                <div id="reference-name" class="reference-name"></div>
+                <div id="reference-note" class="reference-note"></div>
+              </div>
+              <button id="reference-remove" class="text-btn" type="button">Remove</button>
+            </div>
+          </div>
+
+          <textarea id="prompt" rows="2" placeholder="Build anything"></textarea>
+
+          <div class="composer-row">
+            <button id="reference-btn" class="composer-tool" type="button" title="Add reference image" aria-label="Add reference image">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+
+            <div class="model-strip">
+              <label>
+                <span>AI</span>
+                <select id="provider-select" title="AI provider">
+                  <option value="gemini">Gemini</option>
+                  <option value="groq">Groq</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="claude">Claude</option>
+                  <option value="openrouter">OpenRouter</option>
+                </select>
+              </label>
+              <label>
+                <span>Model</span>
+                <select id="model-select"></select>
+              </label>
+            </div>
+
+            <button id="cancel-btn" class="composer-tool" type="button" hidden title="Cancel" aria-label="Cancel">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+            </button>
+            <button id="retry-btn" class="composer-tool" type="button" hidden title="Retry" aria-label="Retry">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.7"/><path d="M20 4v6h-6"/></svg>
+            </button>
+            <button id="send-btn" class="send-btn" type="submit" title="Design" aria-label="Design">
+              <span class="send-text">Design</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+            </button>
+          </div>
+        </form>
+      </section>
+
+      <section class="viewer-panel" aria-label="CAD viewer">
+        <div id="viewer" class="viewer">
+          <div id="viewer-empty" class="viewer-empty">
+            <div class="empty-icon">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5h8v14H8z"/><path d="M10 8h4v8h-4z"/></svg>
+            </div>
+            <p>Your part will appear here</p>
+            <span>Describe something and hit Design</span>
+          </div>
+          <div id="viewer-overlay" class="viewer-overlay" hidden>
+            <div class="artifact-copy">
+              <div class="artifact-name" id="artifact-name">-</div>
+              <div class="artifact-dims" id="artifact-dims"></div>
+            </div>
+            <button id="reset-view" class="tool-btn" type="button">Reset</button>
+            <div class="artifact-actions">
+              <button id="export-btn" class="tool-btn" type="button">Export</button>
+            </div>
+          </div>
+          <div id="viewer-loading" class="viewer-loading" hidden>
+            <div class="spinner"></div>
+            <span id="viewer-loading-text">Rendering...</span>
+          </div>
+          
+          <div id="export-popup" class="export-popup" hidden>
+            <div class="export-head">
+              <h3>Export Model</h3>
+              <button id="export-close" class="close-btn" type="button" aria-label="Close export">
+                <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+              </button>
+            </div>
+            <div class="export-grid">
+              <button class="format-btn" type="button" data-fmt="step">STEP</button>
+              <button class="format-btn" type="button" data-fmt="stl">STL</button>
+              <button class="format-btn" type="button" data-fmt="glb">GLB</button>
+              <button class="format-btn" type="button" data-fmt="3mf">3MF</button>
+              <button class="format-btn" type="button" data-fmt="obj">OBJ</button>
+              <button class="format-btn" type="button" data-fmt="ply">PLY</button>
+              <button class="format-btn" type="button" data-fmt="iges">IGES</button>
+              <button class="format-btn" type="button" data-fmt="dxf">DXF</button>
+              <button class="format-btn" type="button" data-fmt="svg">SVG</button>
+              <button class="format-btn" type="button" data-fmt="png">PNG</button>
+              <button class="format-btn" type="button" data-fmt="jpg">JPG</button>
+            </div>
+            <div id="export-progress" class="export-progress" hidden>
+              <div class="progress-bar-bg"><div id="progress-bar-fill" class="progress-bar-fill"></div></div>
+              <span id="progress-status" class="progress-status">Exporting...</span>
+            </div>
+          </div>
+          <button id="texture-tab" class="texture-tab" type="button" hidden title="Texture">Texture</button>
+          <div id="texture-panel" class="texture-panel" hidden>
+            <div class="texture-head">
+              <div class="texture-title">Add texture to it</div>
+              <button id="texture-close" class="texture-close" type="button" title="Hide to the side bar" aria-label="Hide texture panel">
+                <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+              </button>
+            </div>
+            <textarea id="texture-input" rows="3" placeholder="Describe the finish — e.g. brushed aluminium, matte black powder coat, walnut grain, knurled grip"></textarea>
+            <div id="texture-status" class="texture-status" role="status"></div>
+            <div class="texture-actions">
+              <button id="texture-remove" class="texture-remove" type="button" hidden>Remove</button>
+              <div class="texture-spacer"></div>
+              <button id="texture-ok" class="texture-ok" type="button">OK</button>
+            </div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="modal" class="modal" hidden>
+    <div class="modal-card sidebar-layout">
+      
+      <div class="settings-sidebar">
+        <div class="sidebar-header">
+          <h2>Settings</h2>
+        </div>
+        <button type="button" class="settings-nav-btn active" data-target="panel-keys">API Keys</button>
+        <button type="button" class="settings-nav-btn" data-target="panel-skills">Skills</button>
+        <button type="button" class="settings-nav-btn" data-target="panel-ai">AI Config</button>
+      </div>
+
+      <div class="settings-content">
+        <div class="content-header">
+          <h2 id="settings-content-title">API Keys</h2>
+          <button type="button" id="settings-close" class="close-btn" aria-label="Close settings">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+          </button>
+        </div>
+
+        <div id="panel-keys" class="settings-panel active">
+          <p class="panel-desc">Manage API keys per provider. Only one key can be active at a time.</p>
+          <div class="provider-sections">
+            <!-- Will be populated by JS -->
+          </div>
+          
+          <div id="add-key-dialog" class="skill-form" hidden style="margin-top: 16px;">
+            <h3 id="add-key-title" style="margin-top:0; font-size: 14px; margin-bottom: 12px;">Add Key</h3>
+            <form id="add-key-form" style="display:flex; flex-direction:column; gap:8px;">
+              <input type="hidden" id="add-key-provider">
+              <input type="text" id="add-key-label" placeholder="Key Label (e.g. Work Key)" required />
+              <input type="password" id="add-key-value" placeholder="API Key" required />
+              <div class="skill-form-actions" style="margin-top: 8px;">
+                <button type="button" id="add-key-cancel" class="test-btn">Cancel</button>
+                <button type="submit" class="save-btn">Save Key</button>
+              </div>
+            </form>
+          </div>
+        </div>
+
+        <div id="panel-skills" class="settings-panel" hidden>
+          <div class="panel-header-row">
+            <p class="panel-desc">Add custom instructions to shape the agent's behavior. Max 2 active at once.</p>
+            <button type="button" id="create-skill-btn" class="create-btn">+ New Skill</button>
+          </div>
+          
+          <form id="skill-form" class="skill-form" hidden>
+            <input type="text" id="skill-name" placeholder="Skill name (e.g. 3D Printing Constraints)" required />
+            <textarea id="skill-body" placeholder="Describe the skill in detail..." rows="4" required></textarea>
+            <div class="skill-form-actions">
+              <button type="button" id="skill-cancel-btn" class="test-btn">Cancel</button>
+              <button type="submit" class="save-btn" style="min-width:90px;height:36px;font-size:13px;">Save</button>
+            </div>
+          </form>
+          <div id="skills-note" class="settings-note"></div>
+
+          <div id="skills-list" class="skills-list"></div>
+          <div id="skills-empty" class="settings-note" style="margin-top:16px; text-align:center; color:var(--text-faint);">
+            No skills created yet. Click "+ New Skill" to add one.
+          </div>
+        </div>
+
+        <div id="panel-ai" class="settings-panel" hidden>
+          <p class="panel-desc">Tune the agent's behavior and set CAD defaults.</p>
+          <form id="ai-config-form" class="ai-config-form">
+            
+            <div class="config-row">
+              <label>
+                <div class="config-label">
+                  <span>Quality Mode</span>
+                  <small>Preset profiles for speed vs reasoning</small>
+                </div>
+                <div class="ai-radio-group">
+                  <label><input type="radio" name="qualityMode" value="fast"> Fast</label>
+                  <label><input type="radio" name="qualityMode" value="balanced" checked> Balanced</label>
+                  <label><input type="radio" name="qualityMode" value="thorough"> Thorough</label>
+                </div>
+              </label>
+            </div>
+
+            <div class="config-row">
+              <label>
+                <div class="config-label">
+                  <span>Temperature (<span id="temp-val">0.1</span>)</span>
+                  <small>Creativity vs precision</small>
+                </div>
+                <input type="range" id="ai-temp" min="0" max="1" step="0.05" value="0.1" class="ai-slider">
+              </label>
+            </div>
+
+            <div class="config-row">
+              <label>
+                <div class="config-label">
+                  <span>Max Iterations (<span id="iter-val">8</span>)</span>
+                  <small>How many times the agent can retry fixes</small>
+                </div>
+                <input type="range" id="ai-iter" min="1" max="12" step="1" value="8" class="ai-slider">
+              </label>
+            </div>
+
+            <div class="config-row">
+              <label>
+                <div class="config-label">
+                  <span>Wall Thickness (<span id="wall-val">3</span> mm)</span>
+                  <small>Default thickness for hollow parts</small>
+                </div>
+                <input type="range" id="ai-wall" min="0.1" max="10" step="0.1" value="3" class="ai-slider">
+              </label>
+            </div>
+
+            <div class="config-row">
+              <label>
+                <div class="config-label">
+                  <span>Cut Tolerance (<span id="tol-val">1</span> mm)</span>
+                  <small>Boolean cut overshoot distance</small>
+                </div>
+                <input type="range" id="ai-tol" min="0.1" max="5" step="0.1" value="1" class="ai-slider">
+              </label>
+            </div>
+
+            <div class="config-row">
+              <label>
+                <div class="config-label">
+                  <span>Fillet Strategy</span>
+                  <small>Controls how fillets are applied</small>
+                </div>
+                <select id="ai-fillet" class="ai-select">
+                  <option value="conservative">Conservative</option>
+                  <option value="moderate" selected>Moderate</option>
+                  <option value="aggressive">Aggressive</option>
+                </select>
+              </label>
+            </div>
+
+            <div class="config-row">
+              <label>
+                <div class="config-label">
+                  <span>Pre-prompt Instructions</span>
+                  <small>Custom instruction prepended to every prompt</small>
+                </div>
+                <textarea id="ai-preprompt" class="ai-textarea" rows="3" placeholder="e.g. Always use imperial units..."></textarea>
+              </label>
+            </div>
+            
+            <div class="modal-actions">
+              <div id="ai-note" class="settings-note"></div>
+              <button type="submit" class="save-btn">Save Config</button>
+            </div>
+          </form>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "../node_modules/three/build/three.module.js",
+      "three/addons/": "../node_modules/three/examples/jsm/"
+    }
+  }
+  </script>
+
+  <div id="editor-overlay" class="editor-overlay" hidden>
+    <div class="editor-header">
+      <span>Cadara Editor</span>
+      <div class="editor-actions">
+        <button id="editor-export" class="primary-btn">Export to Chat</button>
+        <button id="editor-close" class="icon-btn" title="Close Editor">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M18 6L6 18M6 6l12 12"></path>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <iframe id="editor-iframe" src="editor-dist/index.html"></iframe>
+  </div>
+
+  <script src="./app.js" type="module"></script>
+</body>
+</html>

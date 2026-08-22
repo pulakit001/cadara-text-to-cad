@@ -1,0 +1,47 @@
+# ── Dependencies ──
+node_modules/
+
+# ── Secrets ──
+.env
+.env.local
+.env.*.local
+
+# ── Generated output ──
+models/
+*.log
+npm-debug.log*
+
+# ── OS junk ──
+.DS_Store
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# ── IDE / editor ──
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ── Python ──
+__pycache__/
+*.pyc
+.venv/
+
+# ── Dev review artifacts ──
+.impeccable/
+
+# ── Electron build output ──
+dist/
+out/
+
+# ── Generated 3D files at root ──
+*.glb
+*.step
+
+# ── Vendored libraries (Three.js etc.) ──
+vendor/
+
+# ── Python egg-info ──
+**/*.egg-info/

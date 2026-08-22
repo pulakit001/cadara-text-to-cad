@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Gemini / Groq Chat</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <main class="container">
+    <h1>Gemini / Groq Chat</h1>
+    <p class="subtitle">A minimal prompt-in / response-out demo powered by live Gemini and Groq model catalogs.</p>
+
+    <form id="chat-form">
+      <div class="controls">
+        <label>
+          Provider
+          <select id="provider"></select>
+        </label>
+        <label>
+          Model
+          <select id="model"></select>
+        </label>
+      </div>
+      <textarea id="prompt" rows="4" placeholder="Ask anything..." required></textarea>
+      <button id="send-btn" type="submit">Send</button>
+    </form>
+
+    <div id="status" class="status" hidden></div>
+    <div id="output" class="output" hidden></div>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>
