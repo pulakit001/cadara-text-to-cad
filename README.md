@@ -20,8 +20,8 @@ Cadara is an intelligent, open-source desktop application that bridges the gap b
 
 ```bash
 # 1. Clone
-git clone https://github.com/yourusername/cadara.git
-cd cadara
+git clone https://github.com/pulakit001/cadara-text-to-cad.git
+cd cadara-text-to-cad/cadara
 
 # 2. Install JS dependencies
 npm install
@@ -74,7 +74,7 @@ Cadara needs at least one LLM provider key. The free tier works great for gettin
 
 You can add keys in two ways:
 1. **Settings UI** — click the ⚙️ gear icon inside the app (keys are encrypted locally)
-2. **`.env` file** — paste keys directly (see [`.env.example`](./.env.example))
+2. **`.env` file** — paste keys directly (see [`.env.example`](./cadara/.env.example))
 
 ## 🧠 Architecture
 
