@@ -449,18 +449,7 @@ export class LLM {
         if (!retryable || attempt === maxAttempts) throw err;
         if (err.name === "LLMTimeoutError" && ++timeouts >= 3) throw err;
 
-        // Cycle to a nearby model in the catalog on rate limits / dead models.
-        const fullCatalog = await listModels(this.providerId, this.apiKey);
-        const catalog = messagesContainImage(body.messages)
-          ? fullCatalog.filter((m) => m.supportsVision)
-          : fullCatalog;
-        const index = catalog.findIndex((m) => m.id === this.model);
-        if (index !== -1 && catalog.length > 1) {
-          this.model = catalog[(index + 1) % catalog.length].id;
-          body.model = this.model;
-        } else {
-          await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
-        }
+        await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
         attempt++;
       }
     }
