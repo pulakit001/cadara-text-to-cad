@@ -504,6 +504,8 @@ function updateAgentTrace(agent) {
     stepStartTimes.set(agent.id, Date.now());
     activeAgentId = agent.id;
   }
+  // A step re-entering "running" is a rate-limit retry: keep its clock going.
+  if (next.status === "running") stepEndTimes.delete(agent.id);
   if (next.status === "done" || next.status === "error") {
     if (!stepEndTimes.has(agent.id)) {
       stepEndTimes.set(agent.id, Date.now());

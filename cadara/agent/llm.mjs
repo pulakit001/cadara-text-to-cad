@@ -74,11 +74,31 @@ function messagesContainImage(messages = []) {
 }
 
 export class LLMRateLimitError extends Error {
-  constructor(message = "This model is rate-limited right now. Try again in a moment or pick another model.") {
+  constructor(message = "This model is rate-limited right now. Try again in a moment or pick another model.", retryAfterMs = null) {
     super(message);
     this.name = "LLMRateLimitError";
     this.rateLimited = true;
+    this.retryAfterMs = retryAfterMs;
   }
+}
+
+// "Retry-After" headers are seconds or an HTTP date; return ms or null.
+export function parseRetryAfterMs(value) {
+  if (value == null) return null;
+  const text = String(value).trim();
+  if (/^\d+$/.test(text)) return parseInt(text, 10) * 1000;
+  const date = Date.parse(text);
+  return Number.isNaN(date) ? null : Math.max(0, date - Date.now());
+}
+
+const RATE_LIMIT_BASE_DELAY_MS = 2000;
+const RATE_LIMIT_MAX_DELAY_MS = 60000;
+
+// Exponential backoff for 429s: 2s, 4s, 8s, 16s, 32s, capped at 60s.
+// A server-provided Retry-After always wins (capped so a bad header can't stall a run).
+export function rateLimitBackoffMs(attempt, retryAfterMs = null, scale = 1) {
+  const exponential = Math.min(RATE_LIMIT_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1), RATE_LIMIT_MAX_DELAY_MS);
+  return Math.round(Math.max(0, retryAfterMs != null ? Math.min(retryAfterMs, RATE_LIMIT_MAX_DELAY_MS) : exponential) * scale);
 }
 
 export class LLMConfigError extends Error {
@@ -397,7 +417,7 @@ export async function listModels(providerId, apiKey) {
 }
 
 export class LLM {
-  constructor({ provider: providerId, apiKey, model, timeoutMs = 180000 } = {}) {
+  constructor({ provider: providerId, apiKey, model, timeoutMs = 180000, retryDelayScale = 1, rateLimitMaxAttempts = 7 } = {}) {
     const provider = providerById(providerId);
     if (!provider) throw new LLMConfigError(`Unknown provider: ${providerId}`);
     this.providerId = providerId;
@@ -405,6 +425,9 @@ export class LLM {
     this.apiKey = apiKey || process.env[provider.keyEnv];
     this.model = model;
     this.timeoutMs = timeoutMs;
+    // retryDelayScale shrinks sleeps so tests run in milliseconds.
+    this.retryDelayScale = retryDelayScale;
+    this.rateLimitMaxAttempts = Math.max(1, rateLimitMaxAttempts);
     if (!this.apiKey || /your-key-here/i.test(this.apiKey)) {
       throw new LLMConfigError(
         `${provider.label} API key is not set. Add ${provider.keyEnv} to .env or paste it in Settings.`
@@ -412,7 +435,7 @@ export class LLM {
     }
   }
 
-  async chat({ messages, tools = null, temperature = 0.4 }) {
+  async chat({ messages, tools = null, temperature = 0.4, onRetry = null }) {
     const hasImage = messagesContainImage(messages);
     if (!this.model) {
       const fullCatalog = await listModels(this.providerId, this.apiKey);
@@ -434,22 +457,35 @@ export class LLM {
     let attempt = 1;
     let timeouts = 0;
     const maxAttempts = 4;
+    let rateLimitAttempts = 0;
 
     while (attempt <= maxAttempts) {
       try {
         const message = await this.requestChat(body);
         return message;
       } catch (err) {
+        // Rate limits get their own track: more attempts and exponential
+        // backoff (respecting Retry-After) so a free-tier quota window can
+        // pass without the pipeline dying and restarting from zero.
+        if (err instanceof LLMRateLimitError) {
+          rateLimitAttempts++;
+          if (rateLimitAttempts >= this.rateLimitMaxAttempts) throw err;
+          const delayMs = rateLimitBackoffMs(rateLimitAttempts, err.retryAfterMs, this.retryDelayScale);
+          if (onRetry) {
+            onRetry({ attempt: rateLimitAttempts, maxAttempts: this.rateLimitMaxAttempts - 1, delayMs, retryAfterMs: err.retryAfterMs });
+          }
+          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          continue;
+        }
         const retryable =
           err.name === "LLMTransientError" ||
           err.name === "LLMServerError" ||
           err.name === "LLMTimeoutError" ||
-          err.name === "LLMModelError" ||
-          err instanceof LLMRateLimitError;
+          err.name === "LLMModelError";
         if (!retryable || attempt === maxAttempts) throw err;
         if (err.name === "LLMTimeoutError" && ++timeouts >= 3) throw err;
 
-        await new Promise((resolve) => setTimeout(resolve, attempt * 2000));
+        await new Promise((resolve) => setTimeout(resolve, attempt * 2000 * this.retryDelayScale));
         attempt++;
       }
     }
@@ -498,7 +534,7 @@ export class LLM {
       throw new LLMConfigError(`Invalid ${this.provider.label} API key. Update it in Settings.`);
     }
     if (res.status === 404) throw new LLMModelError(body.model, this.provider.label);
-    if (res.status === 429) throw new LLMRateLimitError();
+    if (res.status === 429) throw new LLMRateLimitError(undefined, parseRetryAfterMs(res.headers.get("retry-after")));
     if (res.status >= 500) {
       const serverErr = new Error(`${this.provider.label} server error (HTTP ${res.status}). Retrying...`);
       serverErr.name = "LLMServerError";
@@ -565,7 +601,7 @@ export class LLM {
       throw new LLMConfigError(`Invalid ${this.provider.label} API key. Update it in Settings.`);
     }
     if (res.status === 404) throw new LLMModelError(body.model, this.provider.label);
-    if (res.status === 429) throw new LLMRateLimitError();
+    if (res.status === 429) throw new LLMRateLimitError(undefined, parseRetryAfterMs(res.headers.get("retry-after")));
     if (res.status >= 500) {
       const serverErr = new Error(`${this.provider.label} server error (HTTP ${res.status}). Retrying...`);
       serverErr.name = "LLMServerError";

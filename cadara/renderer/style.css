@@ -1859,7 +1859,7 @@ svg {
 }
 
 .landing-logo {
-  height: 64px;
+  height: 56px;
   width: auto;
   display: block;
   animation: logo-glow 3s ease-in-out infinite alternate;

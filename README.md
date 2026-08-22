@@ -60,6 +60,23 @@ Pre-built .dmg (macOS), .exe (Windows), and .AppImage (Linux) releases are plann
 | 🎯 **Custom Skills** | Define parametric functions the AI can use globally across designs |
 | 🎨 **Texture Pass** | Describe a surface finish and the AI generates a material spec |
 
+## 💡 Example Prompts
+
+Prompts that are meaty enough to exercise the full pipeline (spec → plan → build → review) without being so complex the agent drowns. Each names concrete dimensions and features — that's what makes CAD generation reliable.
+
+| Part | Prompt |
+|---|---|
+| **Small DC motor** | `A small DC hobby motor model: 35 mm diameter cylinder body, 50 mm long, with a 3 mm shaft extending 15 mm from one end on axis, two M3 mounting tabs 5 mm thick sticking out opposite sides of the body, and 4 ventilation slots (2 x 8 mm) evenly spaced around the mid-body.` |
+| **L-bracket** | `An aluminum L-shaped mounting bracket: both legs 80 mm long, 40 mm wide, 6 mm thick, with a 3 mm fillet on the inside corner, five 5 mm holes evenly spaced along each leg, and a 20 x 10 mm cable slot at the end of the vertical leg.` |
+| **Shaft coupling** | `A stepped shaft coupling hub: 60 mm total length with three diameters — 25 mm for 25 mm, 20 mm for 20 mm, 15 mm for 15 mm — a 6 mm through-hole along the axis, an M4 set-screw hole radially through the largest step, and 2 mm chamfers on every exposed edge.` |
+| **Electronics enclosure** | `A raspberry-pill sized project enclosure: 95 x 65 x 30 mm exterior, 3 mm wall thickness, a detachable-looking lid lip 2 mm deep, six M2.5 boss cylinders inside the corners, a 12 x 8 mm power connector cutout on one short side, and 15 round 3 mm vent holes in a grid on the back.` |
+| **Spacer / standoff** | `A hexagonal aluminum standoff: 8 mm across flats, 25 mm tall, with an M4 threaded-look through-hole, 1 mm chamfer on both hex faces, and a knurled-look grip band simulated by 12 shallow v-grooves around the middle.` |
+| **Gear (cosmetic teeth)** | `A spur gear blank: 60 mm outer diameter, 8 mm thick, 20 mm central bore, 24 cosmetic trapezoidal teeth around the rim, a 5 mm lightening hole pattern of 6 holes on a 40 mm bolt circle, and a 3 mm hub step 30 mm diameter on one face.` |
+| **Bearing pillow block** | `A pillow block bearing mount: 70 x 40 mm base plate 8 mm thick with four 6 mm mounting holes, a central raised boss 45 mm tall with a 22 mm bearing bore through it, a 10 mm wide grease notch on top of the boss, and 4 mm fillets where the boss meets the base.` |
+| **Hand crank** | `A hand crank knob assembly as one part: 12 mm diameter handle section 40 mm long with 8 decorative finger flutes, merging into a 90 mm arm 12 mm wide and 8 mm thick, ending in a 20 mm diameter hub with an 8 mm D-shaped shaft hole.` |
+
+Tips for your own prompts: give overall dimensions, name the features (holes, slots, fillets, chamfers) with sizes, and say where each feature goes ("on the top face", "radially through the hub"). One part per prompt works best; iterate with follow-ups like "increase the wall thickness to 4 mm".
+
 ## 🔑 API Keys
 
 Cadara needs at least one LLM provider key. The free tier works great for getting started:

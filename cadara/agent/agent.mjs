@@ -15,6 +15,55 @@ import { compactDesignContext } from "./session.mjs";
 
 const MAX_ITERATIONS = 8;
 
+// Phase-level rate-limit recovery. By the time an LLMRateLimitError escapes
+// llm.chat() the client-level exponential backoff is exhausted, so we re-run
+// the whole phase (planner, builder turn, ...) from its start — prior phases
+// keep their results — with a few extra spaced attempts before giving up.
+const RATE_LIMIT_STEP_RETRIES = 3;
+const RATE_LIMIT_STEP_RETRY_DELAY_MS = 5000;
+
+export async function withRateLimitRetry({ onEvent, agentId, agentName, step, phase, run, retryDelayMs = null }) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await run();
+    } catch (err) {
+      if (!(err instanceof LLMRateLimitError)) throw err;
+      if (attempt >= RATE_LIMIT_STEP_RETRIES) {
+        throw new LLMRateLimitError(
+          `${agentName} is still rate-limited after ${RATE_LIMIT_STEP_RETRIES} retries. ` +
+            "Wait a minute and send the request again, or switch model/provider in AI Config."
+        );
+      }
+      const delay = typeof retryDelayMs === "function"
+        ? retryDelayMs(attempt)
+        : (retryDelayMs ?? RATE_LIMIT_STEP_RETRY_DELAY_MS * (attempt + 1));
+      const delayMs = delay;
+      emitAgent(onEvent, agentId, agentName, "running",
+        `Rate limited — retrying this step in ${Math.round(delayMs / 1000)}s (retry ${attempt + 1}/${RATE_LIMIT_STEP_RETRIES})`,
+        { step, totalSteps: 6, phase });
+      onEvent("status", `${agentName}: rate limited — retrying step (attempt ${attempt + 1} of ${RATE_LIMIT_STEP_RETRIES}) ...`);
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
+  }
+}
+
+// Passes rate limits through so withRateLimitRetry can resume the step;
+// any other failure degrades to the fallback the caller already has.
+function swallowNonRateLimit(err) {
+  if (err instanceof LLMRateLimitError) throw err;
+  return null;
+}
+
+// Surfaces client-level backoff waits as "running" progress so the pipeline
+// UI shows a live countdown instead of looking stalled.
+function onLlmRetry(onEvent, agentId, agentName, step, phase) {
+  return (info) => {
+    emitAgent(onEvent, agentId, agentName, "running",
+      `Rate limited — waiting ${Math.max(1, Math.round(info.delayMs / 1000))}s (try ${info.attempt} of ${info.maxAttempts})`,
+      { step, totalSteps: 6, phase });
+  };
+}
+
 /**
  * Normalizes a text prompt into a short slug (for filenames and identifiers).
  * @param {string} prompt - The raw user prompt.
@@ -209,7 +258,8 @@ async function routeRequest({ llm, prompt, sessionSnapshot, onEvent }) {
         content: `${context}\n\nLATEST USER REQUEST\n${prompt}`,
       },
     ],
-  }).catch(() => null);
+    onRetry: onLlmRetry(onEvent, "router", "Router", 1, "routing"),
+  }).catch(swallowNonRateLimit);
 
   const parsed = parseJsonObject(message?.content || "");
   const mode = parsed?.mode === "modify" || parsed?.mode === "fresh" ? parsed.mode : fallback.mode;
@@ -244,8 +294,8 @@ async function analyzeReferenceImage({ llm, prompt, referenceImage, onEvent }) {
         content: userContentWithReference(prompt, referenceImage, "Analyze this reference image for a text-to-CAD generation task."),
       },
     ],
-  });
-  const analysis = (message?.content || "").trim();
+    onRetry: onLlmRetry(onEvent, "reference", "Reference", 2, "reference"),
+  });  const analysis = (message?.content || "").trim();
   emitAgent(onEvent, "reference", "Reference", "done", analysis ? "Reference image understood." : "No useful image details returned.", { step: 2, totalSteps: 6, phase: "reference" });
   return analysis;
 }
@@ -266,7 +316,8 @@ async function synthesizeSpec({ llm, prompt, routing, sessionSnapshot, reference
           `${context}${referenceContext(referenceAnalysis)}\n\nROUTING\n${JSON.stringify(routing)}${constraints}\n\nLATEST USER REQUEST\n${prompt}`,
       },
     ],
-  }).catch(() => null);
+    onRetry: onLlmRetry(onEvent, "spec", "Intake / Spec", 3, "spec"),
+  }).catch(swallowNonRateLimit);
   const spec = parseJsonObject(message?.content || "") || fallbackSpec({ prompt, routing });
   spec.mode = spec.mode === "modify" || spec.mode === "fresh" ? spec.mode : routing.mode;
   spec.designName = typeof spec.designName === "string" && spec.designName.trim() ? spec.designName : routing.name;
@@ -292,7 +343,8 @@ async function planCad({ llm, prompt, routing, spec, sessionSnapshot, referenceA
           `${context}${referenceContext(referenceAnalysis)}\n\nROUTING\n${JSON.stringify(routing)}${constraints}\n\nCAD BRIEF\n${JSON.stringify(spec)}\n\nRAW REQUEST\n${prompt}`,
       },
     ],
-  }).catch(() => null);
+    onRetry: onLlmRetry(onEvent, "planner", "Planner", 4, "planning"),
+  }).catch(swallowNonRateLimit);
   const plan = parseJsonObject(message?.content || "") || fallbackPlan({ spec });
   plan.name = typeof plan.name === "string" && plan.name.trim() ? plan.name : spec.designName;
   const steps = Array.isArray(plan.steps) ? plan.steps.length : 0;
@@ -332,24 +384,39 @@ async function reviewResult({ llm, prompt, routing, spec, plan, referenceAnalysi
   emitPipeline(onEvent, "reviewing", 6);
   emitAgent(onEvent, "reviewer", "Reviewer", "running", "Checking facts and writing the final summary.", { step: 6, totalSteps: 6, phase: "reviewing" });
   const facts = result.facts ? JSON.stringify(result.facts).slice(0, 5000) : "null";
-  const message = await llm.chat({
-    temperature: 0.2,
-    messages: [
-      { role: "system", content: reviewerPrompt() },
-      {
-        role: "user",
-        content:
-          `User request: ${prompt}\n` +
-          `Reference image analysis: ${referenceAnalysis || "(none)"}\n` +
-          `Routing: ${JSON.stringify(routing)}\n` +
-          `CAD brief: ${JSON.stringify(spec)}\n` +
-          `Build plan: ${JSON.stringify(plan)}\n` +
-          `Generated slug: ${result.slug}\n` +
-          `STEP path: ${result.stepPath}\n` +
-          `Facts JSON: ${facts}`,
-      },
-    ],
-  }).catch(() => null);
+  // Safeguard: the part is already built; if the reviewer stays rate-limited,
+  // fall back to a plain summary instead of failing the whole run.
+  let message = null;
+  try {
+    message = await withRateLimitRetry({
+      onEvent,
+      agentId: "reviewer",
+      agentName: "Reviewer",
+      step: 6,
+      phase: "reviewing",
+      run: () =>
+        llm.chat({
+          temperature: 0.2,
+          messages: [
+            { role: "system", content: reviewerPrompt() },
+            {
+              role: "user",
+              content:
+                `User request: ${prompt}\n` +
+                `Reference image analysis: ${referenceAnalysis || "(none)"}\n` +
+                `Routing: ${JSON.stringify(routing)}\n` +
+                `CAD brief: ${JSON.stringify(spec)}\n` +
+                `Build plan: ${JSON.stringify(plan)}\n` +
+                `Generated slug: ${result.slug}\n` +
+                `STEP path: ${result.stepPath}\n` +
+                `Facts JSON: ${facts}`,
+            },
+          ],
+        }).catch(swallowNonRateLimit),
+    });
+  } catch {
+    message = null;
+  }
   const summary = message?.content || "";
   emitAgent(onEvent, "reviewer", "Reviewer", "done", "Summary ready.", { step: 6, totalSteps: 6, phase: "reviewing" });
   return summary;
@@ -364,29 +431,32 @@ export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, se
 
   let routing, referenceAnalysis = "", spec, plan;
 
+  const retryStep = (agentId, agentName, step, phase, run) =>
+    withRateLimitRetry({ onEvent, agentId, agentName, step, phase, run });
+
   try {
-    routing = await routeRequest({ llm, prompt, sessionSnapshot, onEvent });
+    routing = await retryStep("router", "Router", 1, "routing", () => routeRequest({ llm, prompt, sessionSnapshot, onEvent }));
   } catch (err) {
     emitAgent(onEvent, "router", "Router", "error", err.message || "Router failed.", { step: 1, totalSteps: 6, phase: "routing" });
     throw normalizeError(err);
   }
 
   try {
-    referenceAnalysis = await analyzeReferenceImage({ llm, prompt, referenceImage, onEvent });
+    referenceAnalysis = await retryStep("reference", "Reference", 2, "reference", () => analyzeReferenceImage({ llm, prompt, referenceImage, onEvent }));
   } catch (err) {
     emitAgent(onEvent, "reference", "Reference", "error", err.message || "Reference analysis failed.", { step: 2, totalSteps: 6, phase: "reference" });
     throw normalizeError(err);
   }
 
   try {
-    spec = await synthesizeSpec({ llm, prompt, routing, sessionSnapshot, referenceAnalysis, aiConfig, onEvent });
+    spec = await retryStep("spec", "Intake / Spec", 3, "spec", () => synthesizeSpec({ llm, prompt, routing, sessionSnapshot, referenceAnalysis, aiConfig, onEvent }));
   } catch (err) {
     emitAgent(onEvent, "spec", "Intake / Spec", "error", err.message || "Spec failed.", { step: 3, totalSteps: 6, phase: "spec" });
     throw normalizeError(err);
   }
 
   try {
-    plan = await planCad({ llm, prompt, routing, spec, sessionSnapshot, referenceAnalysis, aiConfig, onEvent });
+    plan = await retryStep("planner", "Planner", 4, "planning", () => planCad({ llm, prompt, routing, spec, sessionSnapshot, referenceAnalysis, aiConfig, onEvent }));
   } catch (err) {
     emitAgent(onEvent, "planner", "Planner", "error", err.message || "Planner failed.", { step: 4, totalSteps: 6, phase: "planning" });
     throw normalizeError(err);
@@ -428,14 +498,35 @@ export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, se
     emitPipeline(onEvent, "building", 5);
     emitAgent(onEvent, "builder", "Builder", "running", "Writing parametric build123d source.", { step: 5, totalSteps: 6, phase: "building" });
     onEvent("status", "Builder agent: designing with " + (llm.model || model || "the selected model") + " ...");
-    try {
-      let temp = aiConfig.temperature;
-      if (aiConfig.qualityMode === "fast") temp = 0.05;
-      if (aiConfig.qualityMode === "thorough") temp = Math.min(1.0, temp + 0.1);
-      return await llm.chat({ messages: [...messages, ...extraMessages], tools: TOOLS, temperature: temp });
-    } catch (err) {
-      throw normalizeError(err);
-    }
+    // Rate limits retry the same turn here (messages intact, no iteration
+    // consumed) instead of killing the build loop.
+    return withRateLimitRetry({
+      onEvent,
+      agentId: "builder",
+      agentName: "Builder",
+      step: 5,
+      phase: "building",
+      run: async () => {
+        try {
+          let temp = aiConfig.temperature;
+          if (aiConfig.qualityMode === "fast") temp = 0.05;
+          if (aiConfig.qualityMode === "thorough") temp = Math.min(1.0, temp + 0.1);
+          return await llm.chat({
+            messages: [...messages, ...extraMessages],
+            tools: TOOLS,
+            temperature: temp,
+            onRetry: (info) => {
+              emitAgent(onEvent, "builder", "Builder", "running",
+                `Rate limited — waiting ${Math.max(1, Math.round(info.delayMs / 1000))}s (try ${info.attempt} of ${info.maxAttempts})`,
+                { step: 5, totalSteps: 6, phase: "building" });
+              onEvent("status", "Builder agent: rate limited — backing off and retrying ...");
+            },
+          });
+        } catch (err) {
+          throw normalizeError(err);
+        }
+      },
+    });
   }
 
   let iterationsLimit = aiConfig.maxIterations;
