@@ -1859,14 +1859,11 @@ svg {
 }
 
 .landing-logo {
-  width: 56px;
-  height: 56px;
-  color: #fff;
+  height: 72px;
+  width: auto;
+  border-radius: 14px;
+  display: block;
   animation: logo-glow 3s ease-in-out infinite alternate;
-}
-
-.brand-text {
-  font-weight: 500;
 }
 
 @keyframes slide-up {

@@ -1,5 +1,5 @@
 <div align="center">
-  <h1>🔷 Cadara</h1>
+  <img src="Cadara logo.png" alt="Cadara" width="360" />
   <p><strong>Design in words.</strong> Generate precision 3D CAD models using natural language and AI agents.</p>
   
   [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
