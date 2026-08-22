@@ -12,7 +12,7 @@ const modelsRoot = path.resolve(import.meta.dirname, "..", "models");
 const providerId = process.env.LLM_PROVIDER || "gemini";
 const provider = PROVIDERS[providerId];
 if (!provider) {
-  console.error(`Unknown LLM_PROVIDER "${providerId}" — use "gemini" or "groq".`);
+  console.error(`Unknown LLM_PROVIDER "${providerId}" — use gemini, zai, qwen, openai, claude, or openrouter.`);
   process.exit(1);
 }
 const apiKey = process.env[provider.keyEnv];

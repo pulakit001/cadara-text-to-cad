@@ -10,11 +10,11 @@ const cadara = window.cadara || {
         models: FALLBACK_CATALOGS.gemini,
         packets: FALLBACK_PACKETS.gemini,
       },
-      groq: {
-        label: "Groq",
+      zai: {
+        label: "Z.AI",
         hasKey: false,
-        models: FALLBACK_CATALOGS.groq,
-        packets: FALLBACK_PACKETS.groq,
+        models: FALLBACK_CATALOGS.zai,
+        packets: FALLBACK_PACKETS.zai,
       },
     },
     defaultProvider: "gemini",
@@ -33,7 +33,25 @@ const cadara = window.cadara || {
   file: { save: async () => ({ ok: true }) },
   session: { clear: async () => ({ ok: true }) },
   texture: { generate: (description) => Promise.resolve({ ok: true, spec: localTextureSpec(description) }) },
+  history: {
+    list: async () => previewHistory,
+    save: async (entry) => {
+      if (!entry?.id) return { ok: false };
+      previewHistory = [entry, ...previewHistory.filter((d) => d.id !== entry.id)];
+      return { ok: true };
+    },
+    remove: async (id) => {
+      previewHistory = previewHistory.filter((d) => d.id !== id);
+      return { ok: true };
+    },
+    clear: async () => {
+      previewHistory = [];
+      return { ok: true };
+    },
+    importLegacy: async () => ({ ok: true }),
+  },
 };
+const previewHistory = [];
 
 window.__errors = [];
 window.addEventListener("error", (e) => window.__errors.push(e.message));
@@ -48,11 +66,17 @@ const FALLBACK_CATALOGS = {
     { id: "gemini-3.6-flash", label: "gemini-3.6-flash — free tier · $0.75 / $3.75 per 1M tok through 2026", supportsVision: true },
     { id: "gemini-3.7-flash", label: "gemini-3.7-flash — free tier · $0.75 / $3.75 per 1M tok through 2026", supportsVision: true },
   ],
-  groq: [
-    { id: "openai/gpt-oss-20b", label: "openai/gpt-oss-20b — free-tier friendly · $0.075 / $0.30 per 1M tok", supportsVision: false },
-    { id: "openai/gpt-oss-120b", label: "openai/gpt-oss-120b — free-tier friendly · $0.15 / $0.60 per 1M tok", supportsVision: false },
-    { id: "qwen/qwen3.6-27b", label: "qwen/qwen3.6-27b — paid · $0.60 / $3.00 per 1M tok", supportsVision: false },
-    { id: "groq/compound-mini", label: "groq/compound-mini — paid/system · see Groq pricing", supportsVision: false },
+  zai: [
+    { id: "glm-4.7-flash", label: "glm-4.7-flash — fast tier · lowest GLM cost", supportsVision: false },
+    { id: "glm-4.5-air", label: "glm-4.5-air — fast tier · lowest GLM cost", supportsVision: false },
+    { id: "glm-4.7", label: "glm-4.7 — balanced · mid GLM cost tier", supportsVision: true },
+    { id: "glm-4.6", label: "glm-4.6 — balanced · mid GLM cost tier", supportsVision: true },
+  ],
+  qwen: [
+    { id: "qwen3-turbo", label: "qwen3-turbo — fast tier · lowest Qwen cost", supportsVision: false },
+    { id: "qwen-turbo", label: "qwen-turbo — fast tier · lowest Qwen cost", supportsVision: false },
+    { id: "qwen3-plus", label: "qwen3-plus — balanced · mid Qwen cost tier", supportsVision: false },
+    { id: "qwen3-max", label: "qwen3-max — flagship · highest Qwen quality tier", supportsVision: false },
   ],
   openai: [
     { id: "gpt-5-nano", label: "gpt-5-nano — efficient · lowest OpenAI cost tier", supportsVision: true },
@@ -72,10 +96,15 @@ const FALLBACK_PACKETS = {
     { id: "gemini-efficient", label: "Gemini Efficient", cost: "low", priceNote: "Small cost increase.", description: "Better everyday CAD planning.", model: "gemini-3.6-flash", supportsVision: true },
     { id: "gemini-paid", label: "Gemini Paid", cost: "medium", priceNote: "Uses stronger paid models.", description: "Better for multi-feature parts.", model: "gemini-3.7-flash", supportsVision: true },
   ],
-  groq: [
-    { id: "groq-efficient", label: "Groq Efficient", cost: "lowest", priceNote: "Lowest-cost Groq preset.", description: "Very fast text-only CAD.", model: "openai/gpt-oss-20b", supportsVision: false },
-    { id: "groq-performance", label: "Groq Performance", cost: "low-medium", priceNote: "Costs more, reasons better.", description: "Better measurement and repair loop.", model: "openai/gpt-oss-120b", supportsVision: false },
-    { id: "groq-ultra", label: "Ultra Groq Console", cost: "highest", priceNote: "Strongest available Groq route.", description: "Best Groq quality over thrift.", model: "groq/compound-mini", supportsVision: false },
+  zai: [
+    { id: "zai-fast", label: "Z.AI Fast", cost: "lowest", priceNote: "Fastest, cheapest GLM route.", description: "Quick text-only CAD generation.", model: "glm-4.7-flash", supportsVision: false },
+    { id: "zai-balanced", label: "Z.AI Balanced", cost: "low-medium", priceNote: "Stronger reasoning for repair loops.", description: "Everyday CAD preset with solid tool calling.", model: "glm-4.7", supportsVision: true },
+    { id: "zai-ultra", label: "Ultra Z.AI", cost: "highest", priceNote: "Highest GLM quality.", description: "Best GLM option where quality beats thrift.", model: "glm-5.1", supportsVision: false },
+  ],
+  qwen: [
+    { id: "qwen-fast", label: "Qwen Fast", cost: "lowest", priceNote: "Lowest-cost DashScope preset.", description: "Very fast text-only CAD generation.", model: "qwen3-turbo", supportsVision: false },
+    { id: "qwen-balanced", label: "Qwen Balanced", cost: "low-medium", priceNote: "Stronger reasoning than Fast.", description: "Balanced preset for measurements and build steps.", model: "qwen3-plus", supportsVision: false },
+    { id: "qwen-ultra", label: "Ultra Qwen", cost: "highest", priceNote: "Uses Qwen's flagship model.", description: "Best Qwen option for hard prompts.", model: "qwen3-max", supportsVision: false },
   ],
   openai: [
     { id: "openai-efficient", label: "OpenAI Efficient", cost: "lowest", priceNote: "Lowest OpenAI preset.", description: "Cheap quick tool-calling.", model: "gpt-5-nano", supportsVision: true },
@@ -95,6 +124,7 @@ const els = {
   historyPopover: document.getElementById("history-popover"),
   historyList: document.getElementById("history-list"),
   historyClearBtn: document.getElementById("history-clear-btn"),
+  historySearch: document.getElementById("history-search"),
   modelSelect: document.getElementById("model-select"),
   settingsBtn: document.getElementById("settings-btn"),
   helpBtn: document.getElementById("help-btn"),
@@ -211,10 +241,10 @@ let activeClientJobId = null;
 let runSerial = 0;
 let retryTimer = null;
 const agentState = new Map();
-const providerCatalogs = { gemini: null, groq: null, openai: null, claude: null };
-const providerPackets = { gemini: null, groq: null, openai: null, claude: null };
-const selectedModelByProvider = { gemini: null, groq: null, openai: null, claude: null };
-const selectedPacketByProvider = { gemini: null, groq: null, openai: null, claude: null };
+const providerCatalogs = { gemini: null, zai: null, qwen: null, openai: null, claude: null };
+const providerPackets = { gemini: null, zai: null, qwen: null, openai: null, claude: null };
+const selectedModelByProvider = { gemini: null, zai: null, qwen: null, openai: null, claude: null };
+const selectedPacketByProvider = { gemini: null, zai: null, qwen: null, openai: null, claude: null };
 
 // Pipeline dashboard state
 let pipelineStartedAt = null;
@@ -226,7 +256,6 @@ let lastThinkingText = "";
 
 const viewerEl = document.getElementById("viewer");
 const HISTORY_KEY = "cadara.previousChats.v1";
-const MAX_PREVIOUS_CHATS = 30;
 const MAX_REFERENCE_BYTES = 10 * 1024 * 1024;
 const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 const EMPTY_IMAGE_SRC = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
@@ -243,7 +272,8 @@ function selectedModelSupportsVision() {
   if (typeof info?.supportsVision === "boolean") return info.supportsVision;
   const provider = currentProvider();
   if (provider === "gemini") return /^gemini-/i.test(els.modelSelect.value || "");
-  if (provider === "groq") return /vision|llama-4|maverick|scout|llava|pixtral/i.test(els.modelSelect.value || "");
+  if (provider === "zai") return /glm-4\.5v|glm-4\.6v|glm-[45]\.[0-9]+v|glm-4\.6$|glm-4\.7$|^glm-5/i.test(els.modelSelect.value || "");
+  if (provider === "qwen") return false;
   if (provider === "openai") return /gpt-[45]|o[34]|vision|omni/i.test(els.modelSelect.value || "");
   if (provider === "claude") return /^claude-/i.test(els.modelSelect.value || "");
   return false;
@@ -292,12 +322,8 @@ function compactModelLabel(provider, modelId) {
       .replace(/^gemini-/i, "")
       .replace(/-/g, " ");
   }
-  if (provider === "groq") {
-    return modelId
-      .replace(/^openai\//i, "")
-      .replace(/^qwen\//i, "")
-      .replace(/^groq\//i, "")
-      .replace(/-/g, " ");
+  if (provider === "zai" || provider === "qwen") {
+    return modelId;
   }
   if (provider === "openai") return modelId.replace(/-/g, " ");
   if (provider === "claude") {
@@ -328,7 +354,12 @@ function init() {
   });
 
   viewer = createViewer(viewerEl);
-  renderPreviousChats();
+  loadHistoryStore();
+
+  els.historySearch?.addEventListener("input", () => {
+    historyQuery = els.historySearch.value || "";
+    renderPreviousChats();
+  });
 
   Promise.all([cadara.meta(), cadara.settings.getKeys()]).then(([m, keys]) => {
     meta = m;
@@ -594,35 +625,92 @@ function setBusy(value) {
   }
 }
 
-function readPreviousChats() {
+// ---------- previous designs store ----------
+// Durable design history lives in the main process (previous-designs.json);
+// this cache mirrors it so every previous design is always visible and
+// searchable, and nothing is lost to localStorage quota pressure.
+let historyItems = [];
+let historyReady = false;
+let historyQuery = "";
+
+async function loadHistoryStore() {
+  // One-time migration: pull legacy renderer-localStorage entries into
+  // the durable store before switching over, then clear the old key.
+  let legacy = [];
   try {
     const parsed = JSON.parse(localStorage.getItem(HISTORY_KEY) || "[]");
-    if (!Array.isArray(parsed)) return [];
-    // Filter out the mock items I erroneously added
-    const realItems = parsed.filter(item => !item.id.startsWith("mock-"));
-    if (realItems.length !== parsed.length) {
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(realItems));
+    if (Array.isArray(parsed)) {
+      legacy = parsed.filter((item) => item && item.id && !String(item.id).startsWith("mock-"));
     }
-    return realItems;
-  } catch {
-    return [];
+  } catch {}
+  if (legacy.length && cadara.history?.importLegacy) {
+    await cadara.history.importLegacy(legacy).catch(() => {});
+  }
+  try { localStorage.removeItem(HISTORY_KEY); } catch {}
+  historyItems = (await cadara.history?.list?.()) || [];
+  if (!Array.isArray(historyItems)) historyItems = [];
+  historyReady = true;
+  renderPreviousChats();
+}
+
+function readPreviousChats() {
+  return historyItems;
+}
+
+// Writes go through to the durable store: upsert each changed entry by id,
+// and delete entries that vanished from the cache so both stores stay in
+// agreement.
+function writePreviousChats(items) {
+  const next = (items || []).filter((d) => d && d.id);
+  const prevById = new Map(historyItems.map((d) => [d.id, d]));
+  const nextIds = new Set(next.map((d) => d.id));
+  historyItems = next;
+  for (const item of next) {
+    const before = prevById.get(item.id);
+    if (!before || JSON.stringify(before) !== JSON.stringify(item)) {
+      const saved = cadara.history?.save?.(item);
+      if (saved && typeof saved.catch === "function") saved.catch(() => {});
+    }
+  }
+  if (cadara.history?.remove) {
+    for (const id of prevById.keys()) {
+      if (!nextIds.has(id)) {
+        const removed = cadara.history.remove(id);
+        if (removed && typeof removed.catch === "function") removed.catch(() => {});
+      }
+    }
   }
 }
 
-function writePreviousChats(items) {
-  try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, MAX_PREVIOUS_CHATS)));
-  } catch {
-    // localStorage full: drop transcripts (bulkiest) from older items and retry once.
-    try {
-      const slim = items.slice(0, MAX_PREVIOUS_CHATS).map((item, i) =>
-        i < 5 ? item : { ...item, transcript: undefined }
-      );
-      localStorage.setItem(HISTORY_KEY, JSON.stringify(slim));
-    } catch {
-      /* give up silently; history stays in memory for this session */
-    }
-  }
+// Search matches every term against the whole design record — prompt,
+// summary, name, slug, dimensions, provider, model, and date.
+function historyRecordHaystack(item) {
+  return [
+    item.prompt,
+    item.summary,
+    item.artifact?.displayName,
+    item.artifact?.slug,
+    Array.isArray(item.artifact?.facts?.entryFacts?.size)
+      ? item.artifact.facts.entryFacts.size.join(" x ")
+      : "",
+    item.provider,
+    item.model,
+    item.savedAt,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function historySearchFilter(items, query) {
+  const terms = (query || "").toLowerCase().split(/\s+/).filter(Boolean);
+  if (!terms.length) return { matches: items, filtered: false };
+  const matches = items.filter((item) => {
+    const hay = historyRecordHaystack(item);
+    // Every term must hit somewhere in the record.
+    return terms.every((term) => hay.includes(term));
+  });
+  return { matches, filtered: true };
 }
 
 function transcriptTitle(item) {
@@ -630,16 +718,33 @@ function transcriptTitle(item) {
 }
 
 function renderPreviousChats() {
-  const items = readPreviousChats();
+  const all = readPreviousChats();
   if (!els.historyList) return;
   els.historyList.innerHTML = "";
 
-  if (items.length === 0) {
+  const { matches: items, filtered } = historySearchFilter(all, historyQuery);
+
+  if (all.length === 0) {
     const empty = document.createElement("div");
     empty.className = "history-empty";
     empty.textContent = "No previous designs yet.";
     els.historyList.appendChild(empty);
     return;
+  }
+
+  if (filtered && items.length === 0) {
+    const empty = document.createElement("div");
+    empty.className = "history-empty";
+    empty.textContent = `No designs match "${historyQuery.trim()}".`;
+    els.historyList.appendChild(empty);
+    return;
+  }
+
+  if (filtered) {
+    const note = document.createElement("div");
+    note.className = "history-match-note";
+    note.textContent = `${items.length} of ${all.length} design${all.length === 1 ? "" : "s"} match`;
+    els.historyList.appendChild(note);
   }
   
   const now = new Date();
@@ -1263,8 +1368,11 @@ els.historyBtn.addEventListener("click", () => {
   els.historyPopover.hidden = !els.historyPopover.hidden;
 });
 
-els.historyClearBtn.addEventListener("click", () => {
-  localStorage.removeItem(HISTORY_KEY);
+els.historyClearBtn.addEventListener("click", async () => {
+  // Wipe the durable store (and any legacy localStorage leftovers).
+  try { await cadara.history?.clear?.(); } catch {}
+  try { localStorage.removeItem(HISTORY_KEY); } catch {}
+  historyItems = [];
   renderPreviousChats();
 });
 
@@ -1342,7 +1450,8 @@ async function renderProviderKeys() {
     { id: "gemini", label: "Gemini", desc: "Recommended for highest CAD reasoning quality." },
     { id: "claude", label: "Claude", desc: "Excellent alternative for planning and logic." },
     { id: "openai", label: "OpenAI", desc: "Solid performance on standard design tasks." },
-    { id: "groq", label: "Groq", desc: "Fast text-only generation." },
+    { id: "zai", label: "Z.AI", desc: "GLM models — strong tool calling, great value." },
+    { id: "qwen", label: "Qwen", desc: "Alibaba DashScope models for text-only CAD generation." },
     { id: "openrouter", label: "OpenRouter", desc: "Access to various models via one API." }
   ];
 

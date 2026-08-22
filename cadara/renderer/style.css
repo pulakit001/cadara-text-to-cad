@@ -93,32 +93,6 @@ svg {
   -webkit-app-region: no-drag;
 }
 
-.maker-attribution {
-  width: 36px;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 7px;
-  color: var(--text-faint);
-  cursor: default;
-}
-
-.maker-attribution img {
-  width: 28px;
-  height: auto;
-  opacity: 0.88;
-}
-
-.maker-attribution span {
-  width: 108px;
-  font-size: 9px;
-  line-height: 1.25;
-  text-align: center;
-  transform: rotate(-90deg) translateX(40px);
-  transform-origin: center;
-  color: var(--text-faint);
-}
-
 .rail-btn {
   width: 36px;
   height: 36px;
@@ -248,10 +222,34 @@ svg {
   border-bottom: 1px solid var(--line);
 }
 
+.history-search {
+  margin: 10px 12px 2px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: #141414;
+  color: var(--text);
+  font-size: 13px;
+  outline: none;
+}
+
+.history-search::placeholder { color: var(--text-faint); }
+
+.history-search:focus-visible {
+  border-color: #4a4a4a;
+  background: #181818;
+}
+
 .history-list {
   flex: 1;
   overflow-y: auto;
   padding: 8px;
+}
+
+.history-match-note {
+  padding: 6px 10px 2px;
+  color: var(--text-faint);
+  font-size: 11px;
 }
 
 .history-group {
@@ -1757,23 +1755,6 @@ svg {
     gap: 16px;
   }
 
-  .maker-attribution {
-    width: auto;
-    flex-direction: row;
-    gap: 6px;
-  }
-
-  .maker-attribution img {
-    width: 24px;
-  }
-
-  .maker-attribution span {
-    width: auto;
-    transform: none;
-    font-size: 9px;
-    white-space: nowrap;
-  }
-  
   .rail-btn {
     width: 44px;
     height: 44px;
@@ -2008,6 +1989,15 @@ svg {
 
 .landing-btn:active {
   transform: translateY(0) scale(0.98);
+}
+
+.landing-maker {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12.5px;
+  letter-spacing: 0.04em;
+  animation: slide-up 1s cubic-bezier(0.16, 1, 0.3, 1) 0.55s forwards;
+  opacity: 0;
+  transform: translateY(20px);
 }
 
 .landing-footer {

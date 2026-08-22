@@ -1,53 +1,55 @@
 <div align="center">
   <img src="Cadara logo.png" alt="Cadara" width="360" />
   <p><strong>Design in words.</strong> Generate precision 3D CAD models using natural language and AI agents.</p>
-  
+
   [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
   [![Electron](https://img.shields.io/badge/Electron-43-47848F.svg?logo=electron&logoColor=white)](https://www.electronjs.org/)
-  [![Python](https://img.shields.io/badge/Python-3.10+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
-  [![Node.js](https://img.shields.io/badge/Node.js-18+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
+  [![Python](https://img.shields.io/badge/Python-3.12+-3776AB.svg?logo=python&logoColor=white)](https://www.python.org/)
+  [![Node.js](https://img.shields.io/badge/Node.js-22+-339933.svg?logo=node.js&logoColor=white)](https://nodejs.org/)
+  [![Download](https://img.shields.io/badge/Download-Latest_Release-2ea44f?logo=github&logoColor=white)](https://github.com/pulakit001/cadara-text-to-cad/releases/latest)
+
+  **[⬇️ Download for Windows & macOS](https://github.com/pulakit001/cadara-text-to-cad/releases/latest)**
 </div>
 
 ---
 
-Cadara is an intelligent, open-source desktop application that bridges the gap between natural language descriptions and precise, manufacturable CAD geometry. Powered by Large Language Models (LLMs) and the `build123d` OpenCascade engine, Cadara acts as your personal mechanical engineering assistant.
-
 > **Describe a part → AI writes the geometry → Preview, iterate, export.**
 
-## About Us
+Cadara is an open-source desktop text-to-CAD workbench. Describe a mechanical part in plain language and a six-stage agent pipeline writes real `build123d` code, builds it with the OpenCascade kernel, verifies the geometry facts, and hands you a manufacturable model — STEP, STL, GLB, and more.
 
-Cadara is built for makers, engineers, students, and product teams who want to move from an idea to inspectable CAD without losing control of the design process. The application keeps the workflow local: you describe the geometry, the agent generates build123d code, and the CAD runtime produces a model you can review and export.
+## Why Cadara
 
-The project is experimental and open source. It is intended for learning, prototyping, and early design exploration. Always review dimensions, tolerances, materials, and manufacturability before using generated geometry in a real product.
+Most text-to-CAD tools are cloud APIs — you send prompts to someone else's geometry service and pay per part. Cadara runs **on your machine**:
+
+| | Cloud text-to-CAD APIs | Cadara |
+|---|---|---|
+| Geometry engine | Vendor's cloud GPU | Local OpenCascade (`build123d`) |
+| Model choice | Whatever the vendor routes to | Gemini, Z.AI, Qwen, OpenAI, Claude, OpenRouter — your pick per task |
+| Your prompts & designs | Leave your machine | Stay local; only LLM calls go out |
+| Cost model | Per-part API fees | Free app + your own provider keys (Gemini free tier works great) |
+| Code output | Vendor formats | Real parametric Python you can read, version, and edit |
+
+It's built for makers, engineers, students, and product teams who want idea → inspectable CAD without giving up control. The project is experimental: always verify dimensions, tolerances, and manufacturability before production use.
 
 ![Cadara application screenshot](./CADARA%20SCC.png)
 
-## Recommended Workflow
-
-1. **Start with a constrained prompt.** Include units, overall dimensions, feature locations, hole sizes, symmetry, and the desired output. Specific constraints produce more useful first-pass geometry.
-2. **Build in small steps.** Begin with the main envelope, then add holes, pockets, fillets, mounting features, or other details in follow-up prompts. Smaller iterations make errors easier to diagnose.
-3. **Inspect before exporting.** Use the 3D preview to check proportions and orientation. Treat the generated model as a design proposal until you have verified the important measurements yourself.
-4. **Use manufacturing language carefully.** Mention clearance, wall thickness, fit, and material when they matter. For production work, confirm the result against your supplier's tolerances and process requirements.
-5. **Keep prompts reusable.** Save successful prompts with the project so you can regenerate a variant consistently after changing a dimension or feature.
-
-### Prompt Examples
-
-```text
-Create a 100 mm x 60 mm x 20 mm aluminum mounting block. Add four
-through-holes of 5.5 mm diameter, centered 10 mm from each edge, and
-apply a 2 mm chamfer to all outside vertical edges. Use millimeters and
-keep the part centered on the origin.
-```
-
-```text
-Add a 12 mm wide, 6 mm deep pocket centered on the top face. Keep at
-least 4 mm of material around the pocket and preserve the existing
-mounting holes.
-```
-
 ## 📥 Download & Install
 
-### Option 1 — Clone & Run (recommended)
+### Option 1 — Installers (easiest)
+
+Grab a one-click installer from the [**Releases page**](https://github.com/pulakit001/cadara-text-to-cad/releases/latest). Every tagged release ships:
+
+| Platform | Download | Format |
+|---|---|---|
+| Windows 10/11 | GitHub Releases | `.exe` NSIS installer |
+| macOS Intel | GitHub Releases | `.dmg` disk image |
+| macOS Apple Silicon | GitHub Releases | `.dmg` disk image |
+
+Installers bundle the Electron app and the Python CAD runtime. On first launch, add an API key ([Gemini's free tier](https://aistudio.google.com/apikey) works immediately).
+
+> Unsigned builds may show OS security warnings (right-click → Open on macOS). Maintainers configure `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID` secrets before public releases. See [LEGAL.md](./LEGAL.md) for the compliance checklist.
+
+### Option 2 — Clone & Run (developers)
 
 ```bash
 # 1. Clone
@@ -72,23 +74,9 @@ cp .env.example .env
 npm start
 ```
 
-### Option 2 — Download ZIP
+### Releasing a new version
 
-Click **Code → Download ZIP** on the GitHub page, unzip, then follow steps 2–5 above.
-
-### Option 3 — Packaged Releases
-
-Tagged releases are built by GitHub Actions and publish platform installers to the GitHub Releases page:
-
-| Platform | Download | Format |
-|---|---|---|
-| Windows 10/11 | GitHub Releases | `.exe` NSIS installer |
-| macOS Intel | GitHub Releases | `.dmg` disk image |
-| macOS Apple Silicon | GitHub Releases | `.dmg` disk image |
-
-The installer includes the Electron application and the repository CAD runtime. The first launch still needs an API key from a provider listed below. Releases should be signed before public distribution: Windows uses an Authenticode certificate, and macOS uses an Apple Developer certificate plus notarization credentials. Unsigned builds may show operating-system security warnings.
-
-To create a release, update the version in `cadara/package.json`, commit the change, and push a tag:
+Update the version in `cadara/package.json`, then push a tag — GitHub Actions builds and publishes all installers automatically:
 
 ```bash
 cd cadara
@@ -96,23 +84,64 @@ npm version patch
 git push origin main --follow-tags
 ```
 
-The workflow runs on `v*` tags and produces the Windows installer and macOS DMG. Repository maintainers should configure `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID` as GitHub Actions secrets before treating an artifact as a public release. See [LEGAL.md](./LEGAL.md) for the release and compliance checklist.
-
 ## ✨ Features
 
 | Feature | Description |
 |---|---|
-| 🗣️ **Natural Language to CAD** | Describe the part you want and Cadara writes the geometry code |
-| 🤖 **Agentic Pipeline** | Router → Spec → Planner → Builder → Reviewer — ensures manufacturable results |
-| 🔄 **Self-Healing Code** | Auto-detects Python/CAD errors, reads tracebacks, and iterates to fix geometry |
-| 🔑 **Multi-Provider** | Gemini, Claude, OpenAI, Groq, and OpenRouter with encrypted local key storage |
-| 📦 **Universal Exports** | `.STEP`, `.STL`, `.GLB`, `.3MF`, `.OBJ`, `.IGES`, `.DXF`, `.SVG` |
-| 🎯 **Custom Skills** | Define parametric functions the AI can use globally across designs |
+| 🗣️ **Natural Language to CAD** | Describe the part and Cadara writes the geometry code |
+| 🤖 **Six-Stage Agent Pipeline** | Router → Reference → Spec → Planner → Builder → Reviewer |
+| 🔄 **Self-Healing Builds** | Reads tracebacks, applies targeted fix hints, retries up to 12 iterations |
+| ✏️ **Continuity-Aware Editing** | Follow-ups modify *your* design in place — same part, preserved dimensions, previous source backed up, size drift checked automatically |
+| 🗂️ **Durable Design History** | Every past design saved locally, always visible, full-text searchable |
+| 🔑 **Multi-Provider** | Gemini, Z.AI, Qwen, OpenAI, Claude, OpenRouter with encrypted local key storage |
+| 📦 **Universal Exports** | `.STEP`, `.STL`, `.GLB`, `.3MF`, `.OBJ`, `.PLY`, `.IGES`, `.DXF`, `.SVG` |
 | 🎨 **Texture Pass** | Describe a surface finish and the AI generates a material spec |
+| 🎯 **Custom Skills** | Teach the agent reusable rules that apply across every design |
+
+## 🧠 How It Works
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Electron App                                            │
+│                                                          │
+│   ┌──────────┐   ┌────────────────────────────────────┐  │
+│   │ Renderer │◄─►│ Node.js Agent Orchestrator          │ │
+│   │ chat+3D  │   │                                     │ │
+│   └──────────┘   │ 1. Router    fresh vs continue      │ │
+│                  │ 2. Reference reads attached images  │ │
+│   ┌──────────┐   │ 3. Spec      vague → measurable     │ │
+│   │ Durable  │   │ 4. Planner   decompose into steps   │ │
+│   │ history  │   │ 5. Builder   write build123d code   │ │
+│   │ (search) │   │              ↳ build → fix → retry  │ │
+│   └──────────┘   │ 6. Reviewer  verify facts, summarize│ │
+│                  └──────────────┬──────────────────────┘  │
+│                                 ▼                         │
+│              ┌─────────────────────────────────┐         │
+│              │ Python CAD Runtime               │        │
+│              │ build123d + OpenCascade          │        │
+│              │ → STEP → STL / GLB / …           │        │
+│              └─────────────────────────────────┘         │
+└──────────────────────────────────────────────────────────┘
+                     │
+                     ▼  LLM API (only calls leave your machine)
+```
+
+- **Electron frontend** — dark-mode GUI in vanilla JS/HTML/CSS with a Three.js viewer
+- **Node orchestrator** (`agent/`) — pipeline stages, rate-limit backoff/recovery, cancellation via AbortSignal, durable session + history stores
+- **Python runtime** (`cad-runtime/`) — executes generated `build123d` code in a subprocess, exports STEP plus tessellated sidecars, and returns measured geometry facts the Reviewer checks against your request
+
+### Follow-up edits that stay consistent
+
+Modify requests ("add a pocket", "increase height to 30 mm") don't regenerate a stranger's part:
+
+1. The **Router** classifies the request as fresh or modify.
+2. Modify runs keep the **same part directory**, overwrite `part.py` in place, and archive the previous source as `part.prev.py`.
+3. The Builder receives the current source plus explicit **continuity rules**: preserve variable names/values, apply only requested edits, keep the bounding box within ~5% unless dimensions changed.
+4. After rebuild, a **fact-delta check** compares old vs new size and flags silent redesigns to the Reviewer.
 
 ## 💡 Example Prompts
 
-Prompts that are meaty enough to exercise the full pipeline (spec → plan → build → review) without being so complex the agent drowns. Each names concrete dimensions and features — that's what makes CAD generation reliable.
+Prompts meaty enough to exercise the full pipeline (spec → plan → build → review) without drowning it. Concrete dimensions and named features are what make generation reliable.
 
 | Part | Prompt |
 |---|---|
@@ -121,87 +150,72 @@ Prompts that are meaty enough to exercise the full pipeline (spec → plan → b
 | **Shaft coupling** | `A stepped shaft coupling hub: 60 mm total length with three diameters — 25 mm for 25 mm, 20 mm for 20 mm, 15 mm for 15 mm — a 6 mm through-hole along the axis, an M4 set-screw hole radially through the largest step, and 2 mm chamfers on every exposed edge.` |
 | **Electronics enclosure** | `A raspberry-pill sized project enclosure: 95 x 65 x 30 mm exterior, 3 mm wall thickness, a detachable-looking lid lip 2 mm deep, six M2.5 boss cylinders inside the corners, a 12 x 8 mm power connector cutout on one short side, and 15 round 3 mm vent holes in a grid on the back.` |
 | **Spacer / standoff** | `A hexagonal aluminum standoff: 8 mm across flats, 25 mm tall, with an M4 threaded-look through-hole, 1 mm chamfer on both hex faces, and a knurled-look grip band simulated by 12 shallow v-grooves around the middle.` |
-| **Gear (cosmetic teeth)** | `A spur gear blank: 60 mm outer diameter, 8 mm thick, 20 mm central bore, 24 cosmetic trapezoidal teeth around the rim, a 5 mm lightening hole pattern of 6 holes on a 40 mm bolt circle, and a 3 mm hub step 30 mm diameter on one face.` |
 | **Bearing pillow block** | `A pillow block bearing mount: 70 x 40 mm base plate 8 mm thick with four 6 mm mounting holes, a central raised boss 45 mm tall with a 22 mm bearing bore through it, a 10 mm wide grease notch on top of the boss, and 4 mm fillets where the boss meets the base.` |
-| **Hand crank** | `A hand crank knob assembly as one part: 12 mm diameter handle section 40 mm long with 8 decorative finger flutes, merging into a 90 mm arm 12 mm wide and 8 mm thick, ending in a 20 mm diameter hub with an 8 mm D-shaped shaft hole.` |
 
-Tips for your own prompts: give overall dimensions, name the features (holes, slots, fillets, chamfers) with sizes, and say where each feature goes ("on the top face", "radially through the hub"). One part per prompt works best; iterate with follow-ups like "increase the wall thickness to 4 mm".
+Tips: give overall dimensions, name features (holes, slots, fillets) with sizes, and say where each goes ("on the top face", "radially through the hub"). One part per prompt works best; iterate with follow-ups like "increase the wall thickness to 4 mm".
 
 ## 🔑 API Keys
 
-Cadara needs at least one LLM provider key. The free tier works great for getting started:
+At least one provider key is required. The free tier gets you started instantly:
 
 | Provider | Free Tier | Get a Key |
 |---|---|---|
-| **Google Gemini** ⭐ | Yes — generous free quota | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
-| **Groq** | Yes — fast inference | [console.groq.com/keys](https://console.groq.com/keys) |
-| **OpenAI** | No — pay-as-you-go | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
-| **Anthropic Claude** | No — pay-as-you-go | [console.anthropic.com](https://console.anthropic.com/settings/keys) |
+| **Google Gemini** ⭐ | Yes — generous quota | [aistudio.google.com/apikey](https://aistudio.google.com/apikey) |
+| **Z.AI** (GLM) | Free tier for Flash models | [z.ai](https://z.ai) |
+| **Qwen** (DashScope) | New-user credits | [Alibaba Cloud Model Studio](https://bailian.console.alibabacloud.com) |
+| **OpenAI** | Pay-as-you-go | [platform.openai.com/api-keys](https://platform.openai.com/api-keys) |
+| **Anthropic Claude** | Pay-as-you-go | [console.anthropic.com](https://console.anthropic.com/settings/keys) |
 | **OpenRouter** | Varies by model | [openrouter.ai/keys](https://openrouter.ai/keys) |
 
-You can add keys in two ways:
-1. **Settings UI** — click the ⚙️ gear icon inside the app (keys are encrypted locally)
-2. **`.env` file** — paste keys directly (see [`.env.example`](./cadara/.env.example))
+Every catalog is filtered to models that actually support tool calling — the one capability the agent pipeline requires — so what you see is what works.
 
-## 🧠 Architecture
+Add keys two ways:
+1. **Settings UI** — the ⚙️ gear inside the app (encrypted with OS keychain storage)
+2. **`.env` file** — see [`.env.example`](./cadara/.env.example)
 
-Cadara operates entirely locally — API calls go only to the LLM provider you choose.
+## 🧪 Testing
 
+```bash
+cd cadara
+npm run agent:test          # headless end-to-end agent run (needs an API key)
+node agent/test-retry.mjs   # unit tests: retry/backoff/cancellation logic
 ```
-┌─────────────────────────────────────────────────┐
-│  Electron App                                   │
-│  ┌───────────┐  ┌────────────────────────────┐  │
-│  │  Renderer  │  │  Node.js Agent Orchestrator │  │
-│  │  (HTML/CSS │◄─►│  Router → Spec → Planner  │  │
-│  │   /JS)     │  │  → Builder → Reviewer      │  │
-│  └───────────┘  └──────────┬─────────────────┘  │
-│                            │                     │
-│                 ┌──────────▼─────────────────┐  │
-│                 │  Python CAD Runtime         │  │
-│                 │  build123d + OpenCascade    │  │
-│                 │  → STEP / STL / GLB        │  │
-│                 └────────────────────────────┘  │
-└─────────────────────────────────────────────────┘
-         │
-         ▼  LLM API (Gemini / Claude / OpenAI / Groq)
-```
-
-- **Electron Frontend** — Fully responsive dark-mode GUI, Vanilla JS/HTML/CSS
-- **Node.js Orchestrator** (`agent/`) — Manages the agentic pipeline, conversation history, and context windows
-- **Python Backend** (`cad-runtime/`) — Executes LLM-generated `build123d` code in an isolated subprocess
 
 ## 📁 Project Structure
 
 ```
 cadara/
-├── main.js              # Electron main process
-├── preload.js           # Secure IPC bridge
+├── main.js              # Electron main process, IPC, secure key storage
+├── preload.js           # Context-isolated IPC bridge
+├── history-store.js     # Durable previous-designs store (JSON, atomic writes)
 ├── renderer/            # Frontend UI
 │   ├── index.html
 │   ├── style.css
-│   └── app.js
+│   ├── app.js
+│   └── assets/viewer.js # Three.js viewer + texture engine
 ├── agent/               # LLM agent pipeline
-│   ├── agent.mjs        # Core agentic loop
-│   ├── llm.mjs          # Multi-provider LLM client
-│   ├── prompts.mjs      # System prompts
-│   ├── session.mjs      # Conversation session
-│   └── tools.mjs        # Agent tool definitions
-├── cad-runtime/         # Python CAD engine
-│   └── scripts/         # Geometry execution scripts
+│   ├── agent.mjs        # Six-stage loop, self-healing, modify continuity
+│   ├── llm.mjs          # Multi-provider client, backoff, vision routing
+│   ├── prompts.mjs      # Stage system prompts
+│   ├── session.mjs      # Persistent current-design context
+│   └── tools.mjs        # generate_cad tool → Python runtime
+├── cad-runtime/         # Python CAD engine (build123d + cadpy)
+│   └── scripts/         # STEP/inspect/snapshot CLIs
 ├── .env.example         # Template for API keys
 └── package.json
 ```
 
 ## 🤝 Contributing
 
-We welcome all contributions! Whether it's adding new AI providers, refining the prompt architecture, or tweaking the UI — check out our [Contributing Guidelines](./CONTRIBUTING.md) to get started.
+Contributions welcome — new providers, prompt architecture, UI polish, CAD runtime improvements. See [CONTRIBUTING.md](./CONTRIBUTING.md).
 
 ## 📄 License
 
-This project is licensed under the MIT License — see the [LICENSE](./LICENSE) file for details.
+MIT — see [LICENSE](./LICENSE).
 
 ---
 
 <div align="center">
-  <sub>Built with ❤️ by the Snippetz Labs team </sub>
+  <sub>Built with ❤️ by the <strong>Snippetz Labs</strong> team</sub><br/>
+  <sub><a href="https://github.com/pulakit001/cadara-text-to-cad/issues">Report an issue</a> · <a href="https://github.com/pulakit001/cadara-text-to-cad/releases/latest">Download latest</a></sub>
 </div>

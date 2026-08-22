@@ -98,14 +98,19 @@ function getBundledCadRuntime() {
 
 function getCadPython() {
   const runtime = getBundledCadRuntime();
-  const bundledPython = process.platform === "win32"
-    ? path.join(runtime, ".venv", "Scripts", "python.exe")
-    : path.join(runtime, ".venv", "bin", "python");
+  // Packaged builds prefer the relocatable standalone CPython (see
+  // .github/workflows/release.yml); dev falls back to venvs.
+  const standalone = process.platform === "win32"
+    ? path.join(runtime, "python-dist", "python.exe")
+    : path.join(runtime, "python-dist", "bin", "python3");
+  const venvDir = process.platform === "win32" ? "Scripts" : "bin";
+  const venvExe = process.platform === "win32" ? "python.exe" : "python";
+  const bundledVenv = path.join(runtime, ".venv", venvDir, venvExe);
   const developerPython = path.join(process.env.HOME || "", ".agents", "skills", "cad", ".venv", "bin", "python");
   const candidates = app.isPackaged
-    ? [process.env.CAD_PYTHON, bundledPython]
-    : [process.env.CAD_PYTHON, path.join(runtime, ".venv", "bin", "python"), developerPython];
-  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || candidates.find(Boolean) || bundledPython;
+    ? [process.env.CAD_PYTHON, standalone, bundledVenv]
+    : [process.env.CAD_PYTHON, bundledVenv, developerPython];
+  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || candidates.find(Boolean) || standalone;
 }
 
 /**
@@ -275,8 +280,8 @@ function settingsFile() {
   return path.join(app.getPath("userData"), "settings.json");
 }
 
-const KEY_FIELDS = ["geminiApiKey", "groqApiKey", "openaiApiKey", "claudeApiKey", "openrouterApiKey"];
-const PROVIDER_IDS = ["gemini", "groq", "openai", "claude", "openrouter"];
+const KEY_FIELDS = ["geminiApiKey", "zaiApiKey", "qwenApiKey", "openaiApiKey", "claudeApiKey", "openrouterApiKey"];
+const PROVIDER_IDS = ["gemini", "zai", "qwen", "openai", "claude", "openrouter"];
 const MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024;
 const IMAGE_DATA_URL_RE = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/;
 const MAX_ACTIVE_SKILLS = 2;
@@ -344,9 +349,11 @@ function readSettings({ purgeBadKeys = false } = {}) {
       // Migrate old format to new format
       const oldKeyMap = {
         geminiApiKey: "gemini",
-        groqApiKey: "groq",
+        zaiApiKey: "zai",
+        qwenApiKey: "qwen",
         openaiApiKey: "openai",
         claudeApiKey: "claude",
+        openrouterApiKey: "openrouter",
       };
       
       for (const [oldField, providerId] of Object.entries(oldKeyMap)) {
@@ -399,7 +406,8 @@ function readSettings({ purgeBadKeys = false } = {}) {
       // but let's migrate anyway if it exists
       const oldKeyMap = {
         geminiApiKey: "gemini",
-        groqApiKey: "groq",
+        zaiApiKey: "zai",
+        qwenApiKey: "qwen",
         openaiApiKey: "openai",
         claudeApiKey: "claude",
       };
@@ -425,7 +433,8 @@ function readSettings({ purgeBadKeys = false } = {}) {
     return {
       apiKeys: {
         gemini: [],
-        groq: [],
+        zai: [],
+        qwen: [],
         openai: [],
         claude: [],
         openrouter: []
@@ -457,6 +466,25 @@ async function probeProviderKey(providerId, key) {
           "x-api-key": key,
           "anthropic-version": "2023-06-01",
         },
+        signal: AbortSignal.timeout(20000),
+      });
+    } else if (providerId === "zai" || providerId === "qwen") {
+      // Z.AI and DashScope don't expose /models — validate with a
+      // one-token chat ping instead so valid keys never read as errors.
+      const { PROVIDERS } = await import("./agent/llm.mjs");
+      const provider = PROVIDERS[providerId];
+      if (!provider) return "invalid";
+      res = await fetch(provider.baseUrl + "/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${key}`,
+        },
+        body: JSON.stringify({
+          model: providerId === "zai" ? "glm-4.7-flash" : "qwen-turbo",
+          messages: [{ role: "user", content: "ping" }],
+          max_tokens: 1,
+        }),
         signal: AbortSignal.timeout(20000),
       });
     } else {
@@ -665,6 +693,12 @@ ipcMain.handle("skills:delete", (_event, id) => {
   writeSkills(filtered);
   return { ok: true };
 });
+
+// ---------- previous designs store ----------
+// Durable design history: a JSON file in userData instead of renderer
+// localStorage, so every previous design is always there — searchable,
+// stable, and never lost to quota pressure or a fresh renderer profile.
+require("./history-store").registerHistoryIpc();
 
 ipcMain.handle("settings:getAiConfig", () => {
   return readAiConfig();
@@ -904,11 +938,16 @@ ipcMain.handle("file:export", async (event, { relPath, format, name } = {}) => {
     const python = getCadPython();
     const script = path.join(getBundledCadRuntime(), "scripts", "export_formats.py");
     const dir = path.dirname(filePath);
-    
+    const pylibs = path.join(getBundledCadRuntime(), "pylibs");
+    const exportEnv = fs.existsSync(pylibs) ? { PYTHONPATH: pylibs } : {};
+
     const { spawn } = require("node:child_process");
-    
+
     return new Promise((resolve) => {
-      const child = spawn(python, [script, filePath, "--format", format, "--output", dest], { cwd: dir });
+      const child = spawn(python, [script, filePath, "--format", format, "--output", dest], {
+        cwd: dir,
+        env: { ...process.env, ...exportEnv },
+      });
       
       let stderr = "";
       child.stderr.on("data", (data) => stderr += data.toString());

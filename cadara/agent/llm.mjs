@@ -1,23 +1,31 @@
 import "dotenv/config";
 
-// Multi-provider LLM client. Gemini, Groq, and OpenAI use OpenAI-compatible
-// chat endpoints here; Claude uses Anthropic's Messages API behind a small
-// adapter so the CAD agent can keep one tool-calling contract.
+// Multi-provider LLM client. Gemini, Z.AI, Qwen, and OpenAI use
+// OpenAI-compatible chat endpoints here; Claude uses Anthropic's Messages
+// API behind a small adapter so the CAD agent can keep one tool-calling
+// contract.
 
 export const PROVIDERS = {
-  groq: {
-    id: "groq",
-    label: "Groq",
-    baseUrl: "https://api.groq.com/openai/v1",
-    keyEnv: "GROQ_API_KEY",
-    settingsKey: "groqApiKey",
-  },
   gemini: {
     id: "gemini",
     label: "Gemini",
     baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
     keyEnv: "GEMINI_API_KEY",
     settingsKey: "geminiApiKey",
+  },
+  zai: {
+    id: "zai",
+    label: "Z.AI",
+    baseUrl: "https://api.z.ai/api/paas/v4",
+    keyEnv: "ZAI_API_KEY",
+    settingsKey: "zaiApiKey",
+  },
+  qwen: {
+    id: "qwen",
+    label: "Qwen",
+    baseUrl: "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+    keyEnv: "DASHSCOPE_API_KEY",
+    settingsKey: "qwenApiKey",
   },
   openai: {
     id: "openai",
@@ -51,19 +59,31 @@ export function modelSupportsVision(providerId, modelId = "") {
   if (providerId === "gemini") {
     return /^gemini-/i.test(modelId) && !/embedding|image|tts|veo|live|robotics|computer-use|antigravity|deep-research|lyria|banana|omni/i.test(modelId);
   }
-  if (providerId === "groq") {
-    return /vision|llama-4|maverick|scout|llava|pixtral/i.test(modelId);
+  if (providerId === "zai") {
+    // GLM-4.5V/GLM-4.6V vision variants; base glm-4.6+ are multimodal too.
+    return /vision|^glm-[45]\.?[0-9]*v/i.test(modelId) || /^glm-4\.6$|^glm-4\.5$|^glm-4\.7$|^glm-5/i.test(modelId);
+  }
+  if (providerId === "qwen") {
+    // DashScope text models here are text-in/text-out; the qwen-vl family
+    // handles images but is not offered for this CAD pipeline.
+    return false;
   }
   if (providerId === "openai") {
     return /gpt-[45]|o[34]|vision|omni/i.test(modelId) && !/audio|realtime|image|tts|transcribe|embed/i.test(modelId);
   }
-  if (providerId === "claude") {
-    return /^claude-/i.test(modelId) && !/embed/i.test(modelId);
+  if (toolSupportingClaude(providerId, modelId)) {
+    return true;
   }
   if (providerId === "openrouter") {
-    return /gemini|gpt-[45]|claude-3-5-sonnet|claude-sonnet-4|pixtral/i.test(modelId);
+    return /gemini|gpt-|claude-|pixtral/i.test(modelId);
   }
   return false;
+}
+
+// Claude model ids all support vision; kept as a named guard so the
+// openrouter branch above stays readable.
+function toolSupportingClaude(providerId, modelId) {
+  return providerId === "claude" && /^claude-/i.test(modelId) && !/embed/i.test(modelId);
 }
 
 function messagesContainImage(messages = []) {
@@ -149,12 +169,15 @@ const MODEL_INFO = {
     { match: /3\.5.*flash/i, tier: "free tier", price: "$1.50 / $9.00 per 1M tok", rank: 3 },
     { match: /pro/i, tier: "paid", price: "premium, see Gemini pricing", rank: 4 },
   ],
-  groq: [
-    { match: /gpt-oss-?20b/i, tier: "free-tier friendly", price: "$0.075 / $0.30 per 1M tok", rank: 0 },
-    { match: /gpt-oss-?120b/i, tier: "free-tier friendly", price: "$0.15 / $0.60 per 1M tok", rank: 1 },
-    { match: /qwen\/qwen3-32b/i, tier: "free-tier friendly", price: "$0.29 / $0.59 per 1M tok", rank: 2 },
-    { match: /qwen\/qwen3\.6-27b/i, tier: "paid", price: "$0.60 / $3.00 per 1M tok", rank: 3 },
-    { match: /compound/i, tier: "paid/system", price: "see Groq pricing", rank: 5 },
+  zai: [
+    { match: /flash|air/i, tier: "fast tier", price: "lowest GLM cost tier", rank: 0 },
+    { match: /glm-[45]\.[67]/i, tier: "balanced", price: "mid GLM cost tier", rank: 1 },
+    { match: /glm-5/i, tier: "flagship", price: "highest GLM quality tier", rank: 2 },
+  ],
+  qwen: [
+    { match: /turbo/i, tier: "fast tier", price: "lowest Qwen cost tier", rank: 0 },
+    { match: /plus/i, tier: "balanced", price: "mid Qwen cost tier", rank: 1 },
+    { match: /max/i, tier: "flagship", price: "highest Qwen quality tier", rank: 2 },
   ],
   openai: [
     { match: /gpt-5-nano/i, tier: "efficient", price: "lowest OpenAI cost tier", rank: 0 },
@@ -210,30 +233,56 @@ export const MODEL_PACKETS = {
       preferredModels: ["gemini-pro-latest", "gemini-3.1-pro-preview", "gemini-2.5-pro"],
     },
   ],
-  groq: [
+  zai: [
     {
-      id: "groq-efficient",
-      label: "Groq Efficient",
+      id: "zai-fast",
+      label: "Z.AI Fast",
       cost: "lowest",
-      priceNote: "Lowest-cost Groq console preset.",
-      description: "Very fast text-only CAD generation for simple parts and cheap retry loops.",
-      preferredModels: ["openai/gpt-oss-20b", "llama-3.1-8b-instant"],
+      priceNote: "Fastest, cheapest GLM route.",
+      description: "Quick text-only CAD generation for simple parts and cheap retries.",
+      preferredModels: ["glm-4.7-flash", "glm-4.5-air"],
     },
     {
-      id: "groq-performance",
-      label: "Groq Performance",
+      id: "zai-balanced",
+      label: "Z.AI Balanced",
       cost: "low-medium",
-      priceNote: "Costs more than Efficient, usually stronger reasoning.",
-      description: "Better for measurements, build instructions, and reviewer corrections while staying fast.",
-      preferredModels: ["openai/gpt-oss-120b", "qwen/qwen3.6-27b", "llama-3.3-70b-versatile"],
+      priceNote: "Stronger reasoning for measurements and repair loops.",
+      description: "Everyday CAD preset with solid tool calling and constraint following.",
+      preferredModels: ["glm-4.7", "glm-4.6"],
     },
     {
-      id: "groq-ultra",
-      label: "Ultra Groq Console",
+      id: "zai-ultra",
+      label: "Ultra Z.AI",
       cost: "highest",
-      priceNote: "Uses Groq's strongest available console model/system route.",
-      description: "Best Groq option for difficult text-only CAD prompts where quality beats raw thrift.",
-      preferredModels: ["groq/compound", "groq/compound-mini", "qwen/qwen3.6-27b", "openai/gpt-oss-120b"],
+      priceNote: "Highest GLM quality/cost in the available catalog.",
+      description: "Best GLM option for difficult prompts where quality beats raw thrift.",
+      preferredModels: ["glm-5.1", "glm-5", "glm-4.7"],
+    },
+  ],
+  qwen: [
+    {
+      id: "qwen-fast",
+      label: "Qwen Fast",
+      cost: "lowest",
+      priceNote: "Lowest-cost DashScope preset.",
+      description: "Very fast text-only CAD generation for simple parts and quick retries.",
+      preferredModels: ["qwen3-turbo", "qwen-turbo"],
+    },
+    {
+      id: "qwen-balanced",
+      label: "Qwen Balanced",
+      cost: "low-medium",
+      priceNote: "Costs more than Fast, usually stronger reasoning.",
+      description: "Balanced everyday CAD preset for measurements and build instructions.",
+      preferredModels: ["qwen3-plus", "qwen-plus"],
+    },
+    {
+      id: "qwen-ultra",
+      label: "Ultra Qwen",
+      cost: "highest",
+      priceNote: "Uses Qwen's strongest flagship model.",
+      description: "Best Qwen option for hard text-to-CAD prompts where quality wins.",
+      preferredModels: ["qwen3-max", "qwen-max"],
     },
   ],
   openai: [
@@ -295,7 +344,7 @@ export const MODEL_PACKETS = {
       cost: "lowest",
       priceNote: "Low cost models via OpenRouter.",
       description: "Cheap drafting and simple CAD generation.",
-      preferredModels: ["google/gemini-2.5-flash", "anthropic/claude-haiku-4-5", "openai/gpt-4.1-mini"],
+      preferredModels: ["google/gemini-2.5-flash", "anthropic/claude-haiku-4.5", "openai/gpt-4.1-mini"],
     },
     {
       id: "or-performance",
@@ -303,7 +352,7 @@ export const MODEL_PACKETS = {
       cost: "medium",
       priceNote: "Balanced cost and capability.",
       description: "Strong CAD reasoning from flagship tier models.",
-      preferredModels: ["anthropic/claude-sonnet-4", "meta-llama/llama-3.3-70b-instruct", "qwen/qwen3-32b", "openai/gpt-4.1"],
+      preferredModels: ["anthropic/claude-sonnet-4.5", "meta-llama/llama-3.3-70b-instruct", "qwen/qwen3-max", "openai/gpt-4.1"],
     },
     {
       id: "or-ultra",
@@ -311,7 +360,7 @@ export const MODEL_PACKETS = {
       cost: "highest",
       priceNote: "Premium models via OpenRouter.",
       description: "Complex logic and geometry.",
-      preferredModels: ["google/gemini-2.5-pro", "anthropic/claude-opus-4-1"],
+      preferredModels: ["google/gemini-2.5-pro", "anthropic/claude-opus-4.1"],
     },
   ],
 };
@@ -373,9 +422,20 @@ export async function listModels(providerId, apiKey) {
   const cacheKey = `${providerId}:${apiKey ? apiKey.slice(0, 16) : "nokey"}`;
   if (modelCache.has(cacheKey)) return modelCache.get(cacheKey);
 
+  // Z.AI and Qwen (DashScope) do not expose reliable public /models
+  // endpoints, so ship curated catalogs of models that are verified to
+  // support OpenAI-style tool calling — the one capability this agent
+  // pipeline cannot work without.
+  const CURATED = {
+    zai: ["glm-4.7-flash", "glm-4.5-air", "glm-4.7", "glm-4.6", "glm-5.1", "glm-5"],
+    qwen: ["qwen3-turbo", "qwen-turbo", "qwen3-plus", "qwen-plus", "qwen3-max", "qwen-max"],
+  };
+
   let ids = [];
   try {
-    if (providerId === "gemini") {
+    if (CURATED[providerId]) {
+      ids = CURATED[providerId];
+    } else if (providerId === "gemini") {
       const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
         headers: { "x-goog-api-key": apiKey },
         signal: AbortSignal.timeout(15000),
@@ -399,6 +459,44 @@ export async function listModels(providerId, apiKey) {
       ids = (data.data || [])
         .map((m) => m.id)
         .filter((id) => /claude-(haiku|sonnet|opus)-4|claude-3-5-haiku-latest|claude-3-7-sonnet-latest|claude-3-opus-latest/i.test(id));
+    } else if (providerId === "openrouter") {
+      // The catalog endpoint is public; ask for models that support tool
+      // calling directly so every entry can actually drive the agent loop.
+      const res = await fetch(`${provider.baseUrl}/models?supported_parameters=tools`, {
+        headers: {
+          "HTTP-Referer": "https://github.com/pulakit001/cadara-text-to-cad",
+          "X-Title": "Cadara",
+        },
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      // Only publishers with proven tool-calling quality make the cut —
+      // the dropdown should show models that will actually build CAD.
+      const TRUSTED = /^(openai|anthropic|google|meta-llama|qwen|mistralai|deepseek|x-ai|moonshotai|z-ai|microsoft)\//i;
+      ids = (data.data || [])
+        .filter((m) => {
+          const out = m.architecture?.output_modalities;
+          if (Array.isArray(out) && !out.includes("text")) return false;
+          const id = String(m.id || "");
+          if (!TRUSTED.test(id)) return false;
+          // Batch-only routes can't serve interactive agent turns.
+          if (/(:batch|:offline)$/i.test(id)) return false;
+          // Strip chat/embedding/rerank specials that would never build CAD.
+          return !/embed|whisper|tts|guard|moderation|rerank|search|image-gen/i.test(id);
+        })
+        .sort((a, b) => {
+          // Bigger working context generally means a more capable model;
+          // cheaper price breaks ties so free tiers surface early.
+          const ca = Number(a.context_length || 0);
+          const cb = Number(b.context_length || 0);
+          if (cb !== ca) return cb - ca;
+          const pa = parseFloat(a.pricing?.prompt ?? "0");
+          const pb = parseFloat(b.pricing?.prompt ?? "0");
+          return (Number.isFinite(pa) ? pa : 9) - (Number.isFinite(pb) ? pb : 9);
+        })
+        .slice(0, 30)
+        .map((m) => m.id);
     } else {
       const res = await fetch(`${provider.baseUrl}/models`, {
         headers: { Authorization: `Bearer ${apiKey}` },
@@ -409,14 +507,8 @@ export async function listModels(providerId, apiKey) {
       ids = (data.data || [])
         .map((m) => m.id)
         .filter((id) => {
-          if (providerId === "groq") {
-            return /llama-3\.3-70b-versatile|qwen3-32b|qwen3\.6-27b|gpt-oss-120b/i.test(id);
-          }
           if (providerId === "openai") {
             return /gpt-4\.1|gpt-4o|gpt-5/i.test(id) && !/audio|realtime|image|tts|transcribe|embed/i.test(id);
-          }
-          if (providerId === "openrouter") {
-            return /google\/gemini-2\.5|anthropic\/claude-sonnet-4|anthropic\/claude-haiku-4-5|openai\/gpt-4\.1|meta-llama\/llama-3\.3-70b-instruct|qwen\/qwen3-32b/i.test(id);
           }
           return !/whisper|tts|guard|embed|distil-whisper|orpheus|safeguard/i.test(id);
         });
@@ -426,11 +518,19 @@ export async function listModels(providerId, apiKey) {
   }
 
   const FALLBACK = {
-    groq: ["llama-3.3-70b-versatile", "qwen/qwen3.6-27b", "openai/gpt-oss-120b"],
+    zai: CURATED.zai,
+    qwen: CURATED.qwen,
     gemini: ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-2.5-flash", "gemini-2.5-pro"],
     openai: ["gpt-4.1-mini", "gpt-4.1", "gpt-5-nano", "gpt-5-mini", "gpt-5"],
     claude: ["claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-1", "claude-sonnet-4-0", "claude-3-5-haiku-latest"],
-    openrouter: ["google/gemini-2.5-flash", "anthropic/claude-sonnet-4", "openai/gpt-4.1-mini"],
+    openrouter: [
+      "google/gemini-2.5-flash",
+      "openai/gpt-4.1-mini",
+      "anthropic/claude-haiku-4.5",
+      "meta-llama/llama-3.3-70b-instruct",
+      "anthropic/claude-sonnet-4.5",
+      "google/gemini-2.5-pro",
+    ],
   };
   if (!ids.length) ids = FALLBACK[providerId] || [];
 
@@ -480,9 +580,14 @@ export class LLM {
 
     const body = { messages, temperature, model: this.model };
     if (tools && tools.length) body.tools = tools;
-    if (this.providerId === "groq" && /gpt-oss/i.test(this.model)) {
+    if (/gpt-oss/i.test(this.model)) {
       body.reasoning_effort = "low";
       body.max_tokens = 4096;
+    }
+    // DashScope rejects non-streaming calls to Qwen3 thinking-capable
+    // models unless thinking is explicitly disabled.
+    if (this.providerId === "qwen") {
+      body.enable_thinking = false;
     }
 
     let attempt = 1;
@@ -539,12 +644,19 @@ export class LLM {
 
     let res;
     try {
+      const headers = {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${this.apiKey}`,
+      };
+      // Recommended OpenRouter attribution headers (optional but they make
+      // the app visible in OpenRouter's rankings dashboard).
+      if (this.providerId === "openrouter") {
+        headers["HTTP-Referer"] = "https://github.com/pulakit001/cadara-text-to-cad";
+        headers["X-Title"] = "Cadara";
+      }
       res = await fetch(`${this.provider.baseUrl}/chat/completions`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${this.apiKey}`,
-        },
+        headers,
         body: JSON.stringify(body),
         signal: controller.signal,
       });
@@ -598,7 +710,7 @@ export class LLM {
       empty.name = "LLMTransientError";
       throw empty;
     }
-    // Groq exposes reasoning as message.reasoning on thinking models.
+    // Some providers expose reasoning as message.reasoning on thinking models.
     if (!message.reasoning_content && typeof message.reasoning === "string") {
       message.reasoning_content = message.reasoning;
     }

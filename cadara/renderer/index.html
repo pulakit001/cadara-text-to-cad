@@ -28,6 +28,9 @@
         </h1>
       </div>
       <button id="start-designing-btn" class="landing-btn">Start designing</button>
+      <div class="landing-maker" title="Built by the maker of Snippetz Labs">
+        Built by the team at Snippetz Labs
+      </div>
     </div>
     <div class="landing-footer">Design in words</div>
   </div>
@@ -61,10 +64,6 @@
         <button id="settings-btn" class="rail-btn" type="button" title="Settings" aria-label="Settings">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7Z"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14.2 3h-4.4l-.3 2.7a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.4-1a7 7 0 0 0 2 1.2l.3 2.7h4.4l.3-2.7a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2Z"/></svg>
         </button>
-        <div class="maker-attribution" title="Built by the maker of Snipeds Labs">
-          <img src="./assets/snipeds-labs-logo.svg" alt="Snipeds Labs" />
-          <span>Built by the maker of Snipeds Labs.</span>
-        </div>
         <button id="help-btn" class="rail-btn" type="button" title="Legal and help" aria-label="Legal and help">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 9a2.6 2.6 0 0 1 5 1c0 2-2.5 2.2-2.5 4"/><path d="M12 18h.01"/><circle cx="12" cy="12" r="9"/></svg>
         </button>
@@ -88,6 +87,7 @@
             <span>Previous designs</span>
             <button id="history-clear-btn" class="text-btn" type="button">Clear</button>
           </div>
+          <input id="history-search" class="history-search" type="search" placeholder="Search designs…" autocomplete="off" />
           <div id="history-list" class="history-list"></div>
         </div>
 
@@ -131,7 +131,8 @@
                 <span>AI</span>
                 <select id="provider-select" title="AI provider">
                   <option value="gemini">Gemini</option>
-                  <option value="groq">Groq</option>
+                  <option value="zai">Z.AI</option>
+                  <option value="qwen">Qwen</option>
                   <option value="openai">OpenAI</option>
                   <option value="claude">Claude</option>
                   <option value="openrouter">OpenRouter</option>
@@ -220,7 +221,8 @@
                 <span>AI</span>
                 <select id="texture-provider-select" title="AI provider">
                   <option value="gemini">Gemini</option>
-                  <option value="groq">Groq</option>
+                  <option value="zai">Z.AI</option>
+                  <option value="qwen">Qwen</option>
                   <option value="openai">OpenAI</option>
                   <option value="claude">Claude</option>
                   <option value="openrouter">OpenRouter</option>

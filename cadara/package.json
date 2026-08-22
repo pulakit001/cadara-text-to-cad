@@ -1,7 +1,7 @@
 {
   "name": "cadara",
   "version": "0.1.0",
-  "author": "Snipeds Labs",
+  "author": "Snippetz Labs",
   "description": "Desktop CAD designer: describe a part, let an agent generate validated STEP, view it in 3D",
   "main": "main.js",
   "scripts": {
@@ -21,7 +21,7 @@
     "electron-builder": "^26.0.12"
   },
   "build": {
-    "appId": "com.snipedslabs.cadara",
+    "appId": "com.snippetzlabs.cadara",
     "productName": "Cadara",
     "icon": "renderer/assets/cadara-logo.png",
     "asar": true,
@@ -37,7 +37,7 @@
       {
         "from": "cad-runtime",
         "to": "cad-runtime",
-        "filter": ["scripts/**/*", "LICENSE", ".venv/**/*"]
+        "filter": ["scripts/**/*", "LICENSE", "python-dist/**/*", "pylibs/**/*"]
       }
     ],
     "mac": {

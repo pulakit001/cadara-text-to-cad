@@ -25,7 +25,7 @@ async function test(name, fn) {
 }
 
 function makeLLM(overrides = {}) {
-  const llm = new LLM({ provider: "groq", apiKey: "test-key", model: "test-model", retryDelayScale: 0.001, ...overrides });
+  const llm = new LLM({ provider: "openai", apiKey: "test-key", model: "test-model", retryDelayScale: 0.001, ...overrides });
   return llm;
 }
 

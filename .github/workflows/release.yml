@@ -46,25 +46,39 @@ jobs:
           cache: npm
           cache-dependency-path: cadara/package-lock.json
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - name: Install Node dependencies
         run: npm ci
 
-      - name: Build bundled CAD runtime
+      # The CAD runtime ships a standalone CPython instead of a CI-built
+      # venv: venvs hardcode absolute interpreter paths (pyvenv.cfg home=,
+      # bin symlinks, launcher exes), so a bundled venv breaks the moment
+      # it lands on an end-user machine. Standalone distributions are
+      # relocatable by design.
+      - name: Download standalone Python runtime
         shell: bash
         run: |
-          python -m venv cad-runtime/.venv
+          case "${{ matrix.artifact }}" in
+            mac-arm64) TRIPLE="aarch64-apple-darwin" ;;
+            mac-x64)   TRIPLE="x86_64-apple-darwin" ;;
+            win-x64)   TRIPLE="x86_64-pc-windows-msvc-shared" ;;
+          esac
+          PBS_VERSION="20240107"
+          curl -fL "https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_VERSION}/cpython-3.12+${TRIPLE}-install_only.tar.gz" -o python-dist.tar.gz
+          mkdir -p cad-runtime/python-dist
+          tar -xzf python-dist.tar.gz -C cad-runtime/python-dist --strip-components=1
+          rm -f python-dist.tar.gz
+
+      - name: Install CAD runtime dependencies
+        shell: bash
+        run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            cad-runtime/.venv/Scripts/python -m pip install --upgrade pip
-            cad-runtime/.venv/Scripts/python -m pip install -r cad-runtime/requirements.txt
+            PY="cad-runtime/python-dist/python.exe"
           else
-            cad-runtime/.venv/bin/python -m pip install --upgrade pip
-            cad-runtime/.venv/bin/python -m pip install -r cad-runtime/requirements.txt
+            PY="cad-runtime/python-dist/bin/python3"
           fi
+          "$PY" --version
+          "$PY" -m pip install --upgrade pip
+          "$PY" -m pip install --target cad-runtime/pylibs -r cad-runtime/requirements.txt
 
       - name: Build installer
         env:

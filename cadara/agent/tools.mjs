@@ -7,16 +7,22 @@ const SKILL_ROOT = process.resourcesPath && !process.defaultApp
   ? path.join(process.resourcesPath, "cad-runtime")
   : path.resolve(import.meta.dirname, "..", "cad-runtime");
 
+// Packaged builds ship a relocatable standalone CPython in python-dist
+// with dependencies installed into pylibs (see .github/workflows/release.yml).
+function standalonePython(root) {
+  return process.platform === "win32"
+    ? path.join(root, "python-dist", "python.exe")
+    : path.join(root, "python-dist", "bin", "python3");
+}
+
 async function resolvePython() {
-  const configured = process.env.CAD_PYTHON;
-  const bundledPython = process.platform === "win32"
-    ? path.join(SKILL_ROOT, ".venv", "Scripts", "python.exe")
-    : path.join(SKILL_ROOT, ".venv", "bin", "python");
+  const venvDir = process.platform === "win32" ? "Scripts" : "bin";
+  const venvExe = process.platform === "win32" ? "python.exe" : "python";
   const candidates = [
-    configured,
-    bundledPython,
+    process.env.CAD_PYTHON,
+    standalonePython(SKILL_ROOT),
     path.join(os.homedir(), ".agents", "skills", "cad", ".venv", "bin", "python"),
-    path.join(SKILL_ROOT, ".venv", "bin", "python"),
+    path.join(SKILL_ROOT, ".venv", venvDir, venvExe),
   ].filter(Boolean);
   for (const candidate of candidates) {
     if (!candidate) continue;
@@ -27,11 +33,19 @@ async function resolvePython() {
   );
 }
 
+// Generated CLIs import cadpy from the bundled dependency directory.
+async function runtimeEnv() {
+  const env = { PYTHONIOENCODING: "utf-8" };
+  const pylibs = path.join(SKILL_ROOT, "pylibs");
+  if (await fileExists(pylibs)) env.PYTHONPATH = pylibs;
+  return env;
+}
+
 function run(cmd, args, { cwd, timeoutMs = 300000, env = {}, signal = null }) {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {
       cwd,
-      env: { ...process.env, PYTHONIOENCODING: "utf-8", ...env },
+      env: { ...process.env, ...env },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -99,6 +113,13 @@ export async function generatePart({ name, pythonSource, modelsRoot, overwrite =
   await fs.mkdir(dir, { recursive: true });
 
   const sourcePath = path.join(dir, "part.py");
+  if (overwrite && (await fileExists(sourcePath))) {
+    // In-place modify: keep one generation of the previous source so the
+    // change can be inspected or reverted without version-dir sprawl.
+    const backupPath = path.join(dir, "part.prev.py");
+    await fs.rm(backupPath, { force: true });
+    await fs.rename(sourcePath, backupPath).catch(() => {});
+  }
   await fs.writeFile(sourcePath, pythonSource, "utf8");
 
   const stepPath = path.join(dir, "part.step");
@@ -117,7 +138,7 @@ export async function generatePart({ name, pythonSource, modelsRoot, overwrite =
     path.basename(glbPath),
     "--stl",
     path.basename(stlPath),
-  ], { cwd: dir, signal });
+  ], { cwd: dir, env: await runtimeEnv(), signal });
 
   const log = {
     exitCode: built.code,
@@ -166,7 +187,7 @@ export async function generatePart({ name, pythonSource, modelsRoot, overwrite =
     "refs",
     path.basename(stepPath),
     "--facts",
-  ], { cwd: dir, signal });
+  ], { cwd: dir, env: await runtimeEnv(), signal });
 
   let facts = null;
   if (inspected.code === 0) {

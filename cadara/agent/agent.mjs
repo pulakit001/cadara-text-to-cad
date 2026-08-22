@@ -161,6 +161,61 @@ function extractTraceback(stderr) {
   return tbMatch ? tbMatch[0].slice(-2000) : stderr.slice(-1500);
 }
 
+// Compares previous vs rebuilt geometry so a modify run that silently
+// redesigned the part is surfaced to the reviewer instead of passing quietly.
+function factsDelta(oldFacts, newFacts) {
+  const size = (f) => (Array.isArray(f?.entryFacts?.size) ? f.entryFacts.size : null);
+  const faces = (f) => (Number.isFinite(f?.faceCount) ? f.faceCount : null);
+  const before = size(oldFacts);
+  const after = size(newFacts);
+  if (!before || !after || before.length !== after.length) return null;
+  const changePct = before.map((v, i) => (v ? ((after[i] - v) / Math.abs(v)) * 100 : 0));
+  const maxAbs = Math.max(0, ...changePct.map((p) => Math.abs(p)));
+  return {
+    oldSize: before,
+    newSize: after,
+    changePct: changePct.map((p) => Math.round(p * 10) / 10),
+    faceCountBefore: faces(oldFacts),
+    faceCountAfter: faces(newFacts),
+    withinTolerance: maxAbs <= 5,
+  };
+}
+
+// Tool feedback must stay valid JSON even when logs are huge: shrink whole
+// sections in order instead of slicing the serialized string mid-token.
+function toolResultPayload(result) {
+  const LIMIT = 12000;
+  const payload = {
+    ok: result.ok,
+    error: result.error || null,
+    facts: result.facts,
+    stepPath: result.stepPath,
+    ...(result.ok && result.factsDelta ? { factsDelta: result.factsDelta } : {}),
+    ...(result.ok ? {} : { fixHints: buildFixHints(result) }),
+  };
+  let log = result.log
+    ? {
+        exitCode: result.log.exitCode,
+        stdout: result.log.stdout.slice(-2500),
+        stderr: result.log.stderr.slice(-3000),
+      }
+    : null;
+  let body = JSON.stringify({ ...payload, log });
+  if (body.length <= LIMIT) return body;
+  if (log) {
+    log = { exitCode: result.log.exitCode, stdout: "", stderr: (result.log.stderr || "").slice(-1200) };
+    body = JSON.stringify({ ...payload, log });
+  }
+  if (body.length <= LIMIT) return body;
+  if (payload.facts) {
+    delete payload.facts;
+    body = JSON.stringify({ ...payload, log });
+  }
+  if (body.length <= LIMIT) return body;
+  body = JSON.stringify({ ok: payload.ok, error: payload.error, fixHints: payload.fixHints });
+  return body.length > LIMIT ? body.slice(0, LIMIT) : body;
+}
+
 function buildFixHints(result) {
   const stderr = (result.log?.stderr || "").toLowerCase();
   const hints = [];
@@ -394,7 +449,26 @@ ${briefAndPlan}${constraints}
 LATEST USER REQUEST
 ${prompt}
 
-This is a continuation. Start from CURRENT CAD SOURCE, preserve every existing feature and dimension unless the user explicitly changes it, and return the full updated source.`;
+MODIFY MODE — CONTINUITY RULES
+1. START from the CURRENT CAD SOURCE above and return the FULL updated source — never a snippet or diff.
+2. Keep every existing dimension variable NAME and VALUE unchanged unless this request explicitly changes it.
+3. Do not rename, renumber, remove, restyle, or rebuild existing features. Apply ONLY the requested edits as minimal changes.
+4. The result must stay recognizable as the SAME design: keep the overall bounding box within ~5% of the original unless dimensions were explicitly changed.
+5. Same contract as before: one gen_step() returning exactly ONE Solid or labeled Compound.`;
+}
+
+// Surfaces the modify-run size comparison to the reviewer so silent
+// redesigns get flagged instead of summarized away.
+function continuityNote(result) {
+  const d = result?.factsDelta;
+  if (!d) return "";
+  return (
+    `\nContinuity check (modify run): original size ${JSON.stringify(d.oldSize)} → new size ${JSON.stringify(d.newSize)}` +
+    ` (${d.changePct.join("%, ")}% per axis).` +
+    (d.withinTolerance
+      ? " Overall proportions preserved — confirm the requested change was applied."
+      : " WARNING: overall size shifted beyond ~5% without an explicit dimension change. Flag this to the user.")
+  );
 }
 
 async function reviewResult({ llm, prompt, routing, spec, plan, referenceAnalysis, result, onEvent, signal }) {
@@ -427,7 +501,8 @@ async function reviewResult({ llm, prompt, routing, spec, plan, referenceAnalysi
                 `Build plan: ${JSON.stringify(plan)}\n` +
                 `Generated slug: ${result.slug}\n` +
                 `STEP path: ${result.stepPath}\n` +
-                `Facts JSON: ${facts}`,
+                `Facts JSON: ${facts}` +
+                continuityNote(result),
             },
           ],
         }).catch(swallowNonRateLimit),
@@ -446,6 +521,15 @@ export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, se
   if (referenceImage?.dataUrl && model && !modelSupportsVision(provider, model)) {
     throw new LLMConfigError(`${model} does not support image input. Pick a vision-capable model or remove the reference image.`);
   }
+  // Pre-prompt instructions reach EVERY stage (router, spec, planner,
+  // builder) — the settings describe them as prepended to every prompt.
+  if (aiConfig?.prePromptInstruction && typeof prompt === "string") {
+    prompt = `[USER SYSTEM INSTRUCTION: ${aiConfig.prePromptInstruction}]\n\n${prompt}`;
+  }
+  // Set once routing resolves: a modify run keeps ONE canonical model dir
+  // (same slug, overwritten in place with a .prev.py backup) instead of
+  // spawning mounting-block-v2/v3 dirs and drifting into a new design.
+  let modifyMode = false;
   onEvent("agent_reset", null);
 
   let routing, referenceAnalysis = "", spec, plan;
@@ -459,6 +543,9 @@ export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, se
     emitAgent(onEvent, "router", "Router", "error", err.message || "Router failed.", { step: 1, totalSteps: 6, phase: "routing" });
     throw normalizeError(err);
   }
+  // Locked in AFTER the router so the final routed mode — LLM verdict or
+  // heuristic fallback — decides continuity, not a stale pre-routing guess.
+  modifyMode = routing.mode === "modify" && Boolean(sessionSnapshot?.current?.pythonSource);
 
   try {
     referenceAnalysis = await retryStep("reference", "Reference", 2, "reference", () => analyzeReferenceImage({ llm, prompt, referenceImage, onEvent }));
@@ -482,10 +569,11 @@ export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, se
   }
 
   const fallbackName = plan.name || spec.designName || routing.name || slugFromPrompt(prompt);
-  
-  if (aiConfig?.prePromptInstruction) {
-    prompt = `[USER SYSTEM INSTRUCTION: ${aiConfig.prePromptInstruction}]\n\n` + prompt;
-  }
+  // Modify runs keep the CURRENT design's slug so history entries stay
+  // anchored to one canonical part — not a new slug from the follow-up.
+  const modifySlug = modifyMode && sessionSnapshot?.current?.slug
+    ? sessionSnapshot.current.slug
+    : null;
 
   const messages = [
     { role: "system", content: systemPrompt(skills) },
@@ -497,7 +585,9 @@ export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, se
   let lastReasoning = undefined;
 
   async function runGenerate(args) {
-    const name = typeof args?.name === "string" && args.name.trim() ? args.name : fallbackName;
+    const name = modifySlug
+      ? modifySlug
+      : (typeof args?.name === "string" && args.name.trim() ? args.name : fallbackName);
     const pythonSource = typeof args?.python_source === "string" ? args.python_source : "";
     if (!pythonSource.trim()) {
       return { ok: false, error: "generate_cad was called without python_source." };
@@ -507,9 +597,14 @@ export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, se
     emitPipeline(onEvent, "building", 5);
     emitAgent(onEvent, "builder", "Builder", "running", "Building " + name + " with build123d.", { step: 5, totalSteps: 6, phase: "building", codeSnippet });
     onEvent("status", "Builder agent: building " + name + " ...");
-    const result = await generatePart({ name, pythonSource, modelsRoot, signal });
+    const result = await generatePart({ name, pythonSource, modelsRoot, signal, overwrite: Boolean(modifySlug) });
     lastResult = result;
     if (result.canceled) throw canceledError();
+    // Continuity check on modify runs: compare the rebuilt part's size
+    // against the previous design so silent redesigns get caught.
+    if (result.ok && modifyMode) {
+      result.factsDelta = factsDelta(sessionSnapshot?.current?.facts, result.facts);
+    }
     emitAgent(onEvent, "builder", "Builder", result.ok ? "done" : "error", result.ok ? "CAD build completed." : (result.error || "CAD build failed."), { step: 5, totalSteps: 6, phase: "building" });
     return result;
   }
@@ -584,20 +679,7 @@ export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, se
         messages.push({
           role: "tool",
           tool_call_id: call.id,
-          content: JSON.stringify({
-            ok: result.ok,
-            error: result.error || null,
-            facts: result.facts,
-            stepPath: result.stepPath,
-            log: result.log
-              ? {
-                  exitCode: result.log.exitCode,
-                  stdout: result.log.stdout.slice(-2500),
-                  stderr: result.log.stderr.slice(-3000),
-                }
-              : null,
-            ...(result.ok ? {} : { fixHints: buildFixHints(result) }),
-          }).slice(0, 14000),
+          content: toolResultPayload(result),
         });
         if (result.ok) onEvent("artifact", result);
       }
@@ -650,8 +732,8 @@ export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, se
   if (lastResult?.ok) return finish(lastResult, "");
   throw new Error(
     (lastResult?.error || "The model could not produce a valid part.") +
-      "\\n\\nAfter " + iterationsLimit + " attempts, the build is still failing. " +
-      "Try simplifying the request, breaking it down into smaller steps, or using a more powerful model via the AI Config settings."
+      "\n\nAfter " + iterationsLimit + " attempts, the build is still failing. " +
+        "Try simplifying the request, breaking it down into smaller steps, or using a more powerful model via the AI Config settings."
   );
 
   function finish(result, summaryText) {
@@ -681,6 +763,7 @@ export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, se
       spec,
       plan,
       referenceAnalysis,
+      factsDelta: result.factsDelta || null,
       iterations: iterationsUsed,
       summary,
     };
