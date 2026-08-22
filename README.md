@@ -14,6 +14,37 @@ Cadara is an intelligent, open-source desktop application that bridges the gap b
 
 > **Describe a part → AI writes the geometry → Preview, iterate, export.**
 
+## About Us
+
+Cadara is built for makers, engineers, students, and product teams who want to move from an idea to inspectable CAD without losing control of the design process. The application keeps the workflow local: you describe the geometry, the agent generates build123d code, and the CAD runtime produces a model you can review and export.
+
+The project is experimental and open source. It is intended for learning, prototyping, and early design exploration. Always review dimensions, tolerances, materials, and manufacturability before using generated geometry in a real product.
+
+![Cadara application screenshot](./CADARA%20SCC.png)
+
+## Recommended Workflow
+
+1. **Start with a constrained prompt.** Include units, overall dimensions, feature locations, hole sizes, symmetry, and the desired output. Specific constraints produce more useful first-pass geometry.
+2. **Build in small steps.** Begin with the main envelope, then add holes, pockets, fillets, mounting features, or other details in follow-up prompts. Smaller iterations make errors easier to diagnose.
+3. **Inspect before exporting.** Use the 3D preview to check proportions and orientation. Treat the generated model as a design proposal until you have verified the important measurements yourself.
+4. **Use manufacturing language carefully.** Mention clearance, wall thickness, fit, and material when they matter. For production work, confirm the result against your supplier's tolerances and process requirements.
+5. **Keep prompts reusable.** Save successful prompts with the project so you can regenerate a variant consistently after changing a dimension or feature.
+
+### Prompt Examples
+
+```text
+Create a 100 mm x 60 mm x 20 mm aluminum mounting block. Add four
+through-holes of 5.5 mm diameter, centered 10 mm from each edge, and
+apply a 2 mm chamfer to all outside vertical edges. Use millimeters and
+keep the part centered on the origin.
+```
+
+```text
+Add a 12 mm wide, 6 mm deep pocket centered on the top face. Keep at
+least 4 mm of material around the pocket and preserve the existing
+mounting holes.
+```
+
 ## 📥 Download & Install
 
 ### Option 1 — Clone & Run (recommended)
