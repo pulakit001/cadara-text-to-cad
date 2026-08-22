@@ -39,6 +39,7 @@ contextBridge.exposeInMainWorld("cadara", {
   },
   session: {
     clear: () => ipcRenderer.invoke("session:clear"),
+    restore: (entry) => ipcRenderer.invoke("session:restore", { entry }),
   },
   texture: {
     generate: (description, provider, model, artifact) =>

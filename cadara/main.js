@@ -39,7 +39,9 @@ let cadSessionPromise = null;
  */
 async function getCadSession() {
   if (!cadSessionPromise) {
-    cadSessionPromise = import("./agent/session.mjs").then(({ CadSession }) => new CadSession());
+    cadSessionPromise = import("./agent/session.mjs").then(
+      ({ CadSession }) => new CadSession(path.join(app.getPath("userData"), "cad-session.json"))
+    );
   }
   return cadSessionPromise;
 }
@@ -699,8 +701,12 @@ ipcMain.handle("chat:send", async (_event, { prompt, provider: providerId, model
   activeJob = {
     cancel: () => {
       jobCanceled = true;
+      // Abort in-flight LLM requests, backoff sleeps, and Python builds so
+      // the cancel takes effect immediately, not at the next pipeline event.
+      if (jobAbort) jobAbort.abort();
     },
   };
+  const jobAbort = new AbortController();
 
   const emit = (type, payload) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -718,6 +724,7 @@ ipcMain.handle("chat:send", async (_event, { prompt, provider: providerId, model
       referenceImage: normalizedReferenceImage,
       skills: activeSkills,
       aiConfig,
+      signal: jobAbort.signal,
       onEvent: (type, payload) => {
         if (jobCanceled) throw new Error("canceled");
         emit(type, payload);
@@ -838,6 +845,14 @@ ipcMain.handle("session:clear", async () => {
   const cadSession = await getCadSession();
   cadSession.clear();
   return { ok: true };
+});
+
+// Reopens a saved design as the session's current context so follow-up
+// "modify" prompts work on chats restored from history.
+ipcMain.handle("session:restore", async (_event, { entry } = {}) => {
+  const cadSession = await getCadSession();
+  const restored = cadSession.restore(entry);
+  return { ok: restored };
 });
 
 ipcMain.handle("file:export", async (event, { relPath, format, name } = {}) => {

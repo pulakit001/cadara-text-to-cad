@@ -8,7 +8,7 @@
  */
 
 import assert from "node:assert/strict";
-import { LLM, LLMConfigError, LLMRateLimitError, parseRetryAfterMs, rateLimitBackoffMs } from "./llm.mjs";
+import { LLM, LLMConfigError, LLMRateLimitError, canceledError, parseRetryAfterMs, rateLimitBackoffMs } from "./llm.mjs";
 import { withRateLimitRetry } from "./agent.mjs";
 
 let passed = 0;
@@ -41,21 +41,21 @@ await test("rejects non-numeric junk", () => {
   assert.equal(parseRetryAfterMs(null), null);
 });
 
-await test("exponential backoff grows and caps at 60s", () => {
-  assert.equal(rateLimitBackoffMs(1), 2000);
-  assert.equal(rateLimitBackoffMs(2), 4000);
-  assert.equal(rateLimitBackoffMs(3), 8000);
-  assert.equal(rateLimitBackoffMs(6), 60000);
-  assert.equal(rateLimitBackoffMs(9), 60000);
+await test("exponential backoff grows and caps at 15s", () => {
+  assert.equal(rateLimitBackoffMs(1), 1000);
+  assert.equal(rateLimitBackoffMs(2), 2000);
+  assert.equal(rateLimitBackoffMs(3), 4000);
+  assert.equal(rateLimitBackoffMs(5), 15000);
+  assert.equal(rateLimitBackoffMs(9), 15000);
 });
 
-await test("server Retry-After overrides backoff, capped at 60s", () => {
-  assert.equal(rateLimitBackoffMs(1, 45000), 45000);
-  assert.equal(rateLimitBackoffMs(1, 999999), 60000);
+await test("server Retry-After overrides backoff, capped at 15s", () => {
+  assert.equal(rateLimitBackoffMs(1, 8000), 8000);
+  assert.equal(rateLimitBackoffMs(1, 999999), 15000);
 });
 
 await test("scale shrinks delays for tests", () => {
-  assert.equal(rateLimitBackoffMs(2, null, 0.001), 4);
+  assert.equal(rateLimitBackoffMs(2, null, 0.001), 2);
 });
 
 console.log("LLM.chat client-level retry");
@@ -77,7 +77,7 @@ await test("429s are retried with backoff until the call succeeds", async () => 
   assert.equal(calls, 3);
   assert.equal(retries.length, 2);
   assert.equal(retries[0].attempt, 1);
-  assert.equal(retries[1].delayMs, 4); // 2^2 * 0.001 scale
+  assert.equal(retries[1].delayMs, 2); // 2^1 * 1000ms * 0.001 scale
 });
 
 await test("Retry-After from the server is honored on retry delays", async () => {
@@ -188,6 +188,61 @@ await test("exhausts step retries, then throws a rate-limit error with guidance"
     (err) => err instanceof LLMRateLimitError && /switch model\/provider/i.test(err.message)
   );
   assert.equal(runs, 4); // initial attempt + 3 step retries
+});
+
+console.log("cancellation");
+
+await test("aborting the job signal cuts a backoff sleep short instantly", async () => {
+  const llm = makeLLM({ retryDelayScale: 1 }); // real-scale delay so only one call fits before abort
+  let calls = 0;
+  llm.requestChat = async () => {
+    calls++;
+    throw new LLMRateLimitError(undefined, 10000); // 10s wait
+  };
+  const controller = new AbortController();
+  llm.setCancelSignal(controller.signal);
+  setTimeout(() => controller.abort(), 50);
+  const startedAt = Date.now();
+  await assert.rejects(() => llm.chat({ messages: [{ role: "user", content: "hi" }] }), (err) => err.name === "JobCanceledError");
+  assert.ok(Date.now() - startedAt < 2000, "cancel must not wait out the backoff");
+  assert.equal(calls, 1);
+});
+
+await test("cancellation is never retried as if it were a rate limit", async () => {
+  const llm = makeLLM();
+  let calls = 0;
+  llm.requestChat = async () => {
+    calls++;
+    throw canceledError();
+  };
+  await assert.rejects(() => llm.chat({ messages: [{ role: "user", content: "hi" }] }), (err) => err.name === "JobCanceledError");
+  assert.equal(calls, 1);
+});
+
+await test("step retry aborts instantly when the job is canceled mid-wait", async () => {
+  const controller = new AbortController();
+  let runs = 0;
+  setTimeout(() => controller.abort(), 50);
+  const startedAt = Date.now();
+  await assert.rejects(
+    () =>
+      withRateLimitRetry({
+        onEvent: () => {},
+        agentId: "planner",
+        agentName: "Planner",
+        step: 4,
+        phase: "planning",
+        retryDelayMs: () => 10000,
+        signal: controller.signal,
+        run: async () => {
+          runs++;
+          throw new LLMRateLimitError();
+        },
+      }),
+    (err) => err.name === "JobCanceledError"
+  );
+  assert.ok(Date.now() - startedAt < 2000, "step retry must wake on cancel");
+  assert.equal(runs, 1);
 });
 
 console.log(`\n${passed} tests passed${process.exitCode ? " (with failures)" : ""}`);

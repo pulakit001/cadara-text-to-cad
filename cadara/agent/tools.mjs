@@ -21,7 +21,7 @@ async function resolvePython() {
   );
 }
 
-function run(cmd, args, { cwd, timeoutMs = 300000, env = {} }) {
+function run(cmd, args, { cwd, timeoutMs = 300000, env = {}, signal = null }) {
   return new Promise((resolve) => {
     const child = spawn(cmd, args, {
       cwd,
@@ -31,16 +31,28 @@ function run(cmd, args, { cwd, timeoutMs = 300000, env = {} }) {
     let stdout = "";
     let stderr = "";
     let timedOut = false;
+    let canceled = false;
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill("SIGKILL");
     }, timeoutMs);
+    // Canceling a job kills the geometry build immediately instead of
+    // leaving the kernel crunching until its 5-minute timeout.
+    const onCanceled = () => {
+      canceled = true;
+      child.kill("SIGKILL");
+    };
+    if (signal) {
+      if (signal.aborted) onCanceled();
+      else signal.addEventListener("abort", onCanceled);
+    }
 
     child.stdout.on("data", (d) => (stdout += d.toString()));
     child.stderr.on("data", (d) => (stderr += d.toString()));
     child.on("close", (code) => {
       clearTimeout(timer);
-      resolve({ code, stdout, stderr, timedOut });
+      signal?.removeEventListener("abort", onCanceled);
+      resolve({ code, stdout, stderr, timedOut, canceled: canceled || signal?.aborted === true });
     });
   });
 }
@@ -73,7 +85,7 @@ async function uniqueDirForSlug(modelsRoot, baseSlug) {
   return { slug, dir };
 }
 
-export async function generatePart({ name, pythonSource, modelsRoot, overwrite = false }) {
+export async function generatePart({ name, pythonSource, modelsRoot, overwrite = false, signal = null }) {
   const baseSlug = slugify(name);
   const { slug, dir } = overwrite
     ? { slug: baseSlug, dir: path.join(modelsRoot, baseSlug) }
@@ -99,7 +111,7 @@ export async function generatePart({ name, pythonSource, modelsRoot, overwrite =
     path.basename(glbPath),
     "--stl",
     path.basename(stlPath),
-  ], { cwd: dir });
+  ], { cwd: dir, signal });
 
   const log = {
     exitCode: built.code,
@@ -107,6 +119,17 @@ export async function generatePart({ name, pythonSource, modelsRoot, overwrite =
     stdout: built.stdout.trim().slice(0, 4000),
     stderr: built.stderr.trim().slice(0, 6000),
   };
+
+  if (built.canceled) {
+    return {
+      ok: false,
+      canceled: true,
+      slug,
+      stepPath,
+      log,
+      error: "canceled",
+    };
+  }
 
   if (built.timedOut) {
     return {
@@ -137,7 +160,7 @@ export async function generatePart({ name, pythonSource, modelsRoot, overwrite =
     "refs",
     path.basename(stepPath),
     "--facts",
-  ], { cwd: dir });
+  ], { cwd: dir, signal });
 
   let facts = null;
   if (inspected.code === 0) {

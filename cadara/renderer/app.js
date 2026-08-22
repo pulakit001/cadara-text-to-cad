@@ -607,7 +607,19 @@ function readPreviousChats() {
 }
 
 function writePreviousChats(items) {
-  localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, MAX_PREVIOUS_CHATS)));
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(items.slice(0, MAX_PREVIOUS_CHATS)));
+  } catch {
+    // localStorage full: drop transcripts (bulkiest) from older items and retry once.
+    try {
+      const slim = items.slice(0, MAX_PREVIOUS_CHATS).map((item, i) =>
+        i < 5 ? item : { ...item, transcript: undefined }
+      );
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(slim));
+    } catch {
+      /* give up silently; history stays in memory for this session */
+    }
+  }
 }
 
 function transcriptTitle(item) {
@@ -706,9 +718,28 @@ function saveCurrentChatToHistory({ artifact = lastArtifact, summary = "" } = {}
   renderPreviousChats();
 }
 
-async function openPreviousChat(item) {
+// Rebuilds a CadSession entry from a saved history item so follow-up
+// "modify" prompts keep working on reopened designs.
+function entryFromHistoryItem(item) {
+  const a = item.artifact || {};
+  return {
+    prompt: item.prompt || "",
+    summary: item.summary || "",
+    recordedAt: item.savedAt || new Date().toISOString(),
+    slug: a.slug,
+    dir: a.dir,
+    sourcePath: a.sourcePath,
+    pythonSource: a.pythonSource,
+    facts: a.facts,
+    stepPath: a.stepPath,
+    glbPath: a.glbPath,
+    stlPath: a.stlPath,
+    viewerGlb: a.viewerGlb,
+  };
+}
+
+async function openPreviousChat(item, { announce = false } = {}) {
   if (busy) return;
-  await cadara.session.clear();
   clearActiveDesignView({ clearTranscript: true });
   activeChatId = item.id || null;
   currentTranscript = Array.isArray(item.transcript) ? item.transcript.slice() : [];
@@ -718,6 +749,21 @@ async function openPreviousChat(item) {
     if (item.summary) addMessage("assistant", item.summary, { record: false });
   }
   if (item.artifact) showArtifact(item.artifact);
+  try {
+    await cadara.session?.restore?.(entryFromHistoryItem(item));
+  } catch {
+    /* context restore is best-effort; the chat view still opens */
+  }
+  if (announce) addMessage("system", "Restored your last design session — continue where you left off.");
+}
+
+// Runs once when the user leaves the landing page: reopen the most recent
+// chat so past work is immediately visible after an app restart.
+async function restoreLastSessionOnLaunch() {
+  if (busy || els.chat.children.length) return;
+  const items = readPreviousChats();
+  if (!items.length) return;
+  await openPreviousChat(items[0], { announce: true });
 }
 
 function clearActiveDesignView({ clearTranscript = false } = {}) {
@@ -1110,7 +1156,11 @@ async function send(prompt, isAutoRetry = false) {
         return;
       }
       addMessage("system", res.canceled ? "Canceled." : "⚠ " + res.error);
-      if (!res.canceled) {
+      if (res.canceled) {
+        setStatus("Canceled");
+        stopPipelineTimer();
+        settleRunningRows();
+      } else {
         setStatus("Failed");
         els.retryBtn.hidden = false;
         markPipelineError();
@@ -1619,12 +1669,14 @@ els.formatBtns.forEach((btn) => {
 
 els.startDesigningBtn?.addEventListener("click", () => {
   els.landingPage.classList.add("hidden");
-  
+
   // Wait for transition to complete before removing from DOM flow
   setTimeout(() => {
     els.landingPage.style.display = "none";
     els.prompt.focus();
   }, 800);
+
+  restoreLastSessionOnLaunch();
 });
 
 init();

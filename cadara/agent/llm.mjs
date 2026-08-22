@@ -91,8 +91,31 @@ export function parseRetryAfterMs(value) {
   return Number.isNaN(date) ? null : Math.max(0, date - Date.now());
 }
 
-const RATE_LIMIT_BASE_DELAY_MS = 2000;
-const RATE_LIMIT_MAX_DELAY_MS = 60000;
+const RATE_LIMIT_BASE_DELAY_MS = 1000;
+const RATE_LIMIT_MAX_DELAY_MS = 15000;
+
+export function canceledError() {
+  const err = new Error("canceled");
+  err.name = "JobCanceledError";
+  return err;
+}
+
+// Sleeps that wake immediately when the job is canceled, so a cancel click
+// never waits out a backoff delay.
+function abortableSleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(canceledError());
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      clearTimeout(timer);
+      reject(canceledError());
+    }
+    signal?.addEventListener("abort", onAbort);
+  });
+}
 
 // Exponential backoff for 429s: 2s, 4s, 8s, 16s, 32s, capped at 60s.
 // A server-provided Retry-After always wins (capped so a bad header can't stall a run).
@@ -428,11 +451,19 @@ export class LLM {
     // retryDelayScale shrinks sleeps so tests run in milliseconds.
     this.retryDelayScale = retryDelayScale;
     this.rateLimitMaxAttempts = Math.max(1, rateLimitMaxAttempts);
+    // Optional AbortSignal from the owning job; aborting cancels in-flight
+    // requests and backoff sleeps instantly.
+    this.signal = null;
     if (!this.apiKey || /your-key-here/i.test(this.apiKey)) {
       throw new LLMConfigError(
         `${provider.label} API key is not set. Add ${provider.keyEnv} to .env or paste it in Settings.`
       );
     }
+  }
+
+  setCancelSignal(signal) {
+    this.signal = signal;
+    return this;
   }
 
   async chat({ messages, tools = null, temperature = 0.4, onRetry = null }) {
@@ -464,6 +495,7 @@ export class LLM {
         const message = await this.requestChat(body);
         return message;
       } catch (err) {
+        if (err.name === "JobCanceledError") throw err;
         // Rate limits get their own track: more attempts and exponential
         // backoff (respecting Retry-After) so a free-tier quota window can
         // pass without the pipeline dying and restarting from zero.
@@ -474,7 +506,7 @@ export class LLM {
           if (onRetry) {
             onRetry({ attempt: rateLimitAttempts, maxAttempts: this.rateLimitMaxAttempts - 1, delayMs, retryAfterMs: err.retryAfterMs });
           }
-          await new Promise((resolve) => setTimeout(resolve, delayMs));
+          await abortableSleep(delayMs, this.signal);
           continue;
         }
         const retryable =
@@ -485,7 +517,7 @@ export class LLM {
         if (!retryable || attempt === maxAttempts) throw err;
         if (err.name === "LLMTimeoutError" && ++timeouts >= 3) throw err;
 
-        await new Promise((resolve) => setTimeout(resolve, attempt * 2000 * this.retryDelayScale));
+        await abortableSleep(attempt * 2000 * this.retryDelayScale, this.signal);
         attempt++;
       }
     }
@@ -496,6 +528,14 @@ export class LLM {
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const onJobCanceled = () => controller.abort();
+    if (this.signal) {
+      if (this.signal.aborted) {
+        clearTimeout(timer);
+        throw canceledError();
+      }
+      this.signal.addEventListener("abort", onJobCanceled);
+    }
 
     let res;
     try {
@@ -510,6 +550,8 @@ export class LLM {
       });
     } catch (err) {
       clearTimeout(timer);
+      this.signal?.removeEventListener("abort", onJobCanceled);
+      if (this.signal?.aborted || err.name === "JobCanceledError") throw canceledError();
       if (err.name === "AbortError") {
         const timeout = new Error(
           `${this.provider.label} took too long to respond. Try again or pick another model.`
@@ -522,6 +564,7 @@ export class LLM {
       throw transient;
     }
     clearTimeout(timer);
+    this.signal?.removeEventListener("abort", onJobCanceled);
 
     const data = await res.json().catch(() => ({}));
     const errType = data?.error?.type || "";
@@ -565,6 +608,14 @@ export class LLM {
   async requestClaudeChat(body) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const onJobCanceled = () => controller.abort();
+    if (this.signal) {
+      if (this.signal.aborted) {
+        clearTimeout(timer);
+        throw canceledError();
+      }
+      this.signal.addEventListener("abort", onJobCanceled);
+    }
 
     let res;
     try {
@@ -580,6 +631,8 @@ export class LLM {
       });
     } catch (err) {
       clearTimeout(timer);
+      this.signal?.removeEventListener("abort", onJobCanceled);
+      if (this.signal?.aborted || err.name === "JobCanceledError") throw canceledError();
       if (err.name === "AbortError") {
         const timeout = new Error(
           `${this.provider.label} took too long to respond. Try again or pick another model.`
@@ -592,6 +645,7 @@ export class LLM {
       throw transient;
     }
     clearTimeout(timer);
+    this.signal?.removeEventListener("abort", onJobCanceled);
 
     const data = await res.json().catch(() => ({}));
     const errType = data?.error?.type || "";

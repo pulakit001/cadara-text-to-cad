@@ -8,7 +8,7 @@
  */
 
 import path from "node:path";
-import { LLM, LLMConfigError, LLMRateLimitError, modelSupportsVision } from "./llm.mjs";
+import { LLM, LLMConfigError, LLMRateLimitError, canceledError, modelSupportsVision } from "./llm.mjs";
 import { TOOLS, generatePart } from "./tools.mjs";
 import { plannerPrompt, reviewerPrompt, routerPrompt, specPrompt, systemPrompt } from "./prompts.mjs";
 import { compactDesignContext } from "./session.mjs";
@@ -20,13 +20,30 @@ const MAX_ITERATIONS = 8;
 // the whole phase (planner, builder turn, ...) from its start — prior phases
 // keep their results — with a few extra spaced attempts before giving up.
 const RATE_LIMIT_STEP_RETRIES = 3;
-const RATE_LIMIT_STEP_RETRY_DELAY_MS = 5000;
+const RATE_LIMIT_STEP_RETRY_DELAY_MS = 1500;
 
-export async function withRateLimitRetry({ onEvent, agentId, agentName, step, phase, run, retryDelayMs = null }) {
+// Sleep that wakes instantly on job cancel.
+function abortableSleep(ms, signal) {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted) return reject(canceledError());
+    const timer = setTimeout(() => {
+      signal?.removeEventListener("abort", onAbort);
+      resolve();
+    }, ms);
+    function onAbort() {
+      clearTimeout(timer);
+      reject(canceledError());
+    }
+    signal?.addEventListener("abort", onAbort);
+  });
+}
+
+export async function withRateLimitRetry({ onEvent, agentId, agentName, step, phase, run, retryDelayMs = null, signal = null }) {
   for (let attempt = 0; ; attempt++) {
     try {
       return await run();
     } catch (err) {
+      if (err.name === "JobCanceledError" || signal?.aborted) throw canceledError();
       if (!(err instanceof LLMRateLimitError)) throw err;
       if (attempt >= RATE_LIMIT_STEP_RETRIES) {
         throw new LLMRateLimitError(
@@ -42,7 +59,7 @@ export async function withRateLimitRetry({ onEvent, agentId, agentName, step, ph
         `Rate limited — retrying this step in ${Math.round(delayMs / 1000)}s (retry ${attempt + 1}/${RATE_LIMIT_STEP_RETRIES})`,
         { step, totalSteps: 6, phase });
       onEvent("status", `${agentName}: rate limited — retrying step (attempt ${attempt + 1} of ${RATE_LIMIT_STEP_RETRIES}) ...`);
-      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      await abortableSleep(delayMs, signal);
     }
   }
 }
@@ -380,7 +397,7 @@ ${prompt}
 This is a continuation. Start from CURRENT CAD SOURCE, preserve every existing feature and dimension unless the user explicitly changes it, and return the full updated source.`;
 }
 
-async function reviewResult({ llm, prompt, routing, spec, plan, referenceAnalysis, result, onEvent }) {
+async function reviewResult({ llm, prompt, routing, spec, plan, referenceAnalysis, result, onEvent, signal }) {
   emitPipeline(onEvent, "reviewing", 6);
   emitAgent(onEvent, "reviewer", "Reviewer", "running", "Checking facts and writing the final summary.", { step: 6, totalSteps: 6, phase: "reviewing" });
   const facts = result.facts ? JSON.stringify(result.facts).slice(0, 5000) : "null";
@@ -394,6 +411,7 @@ async function reviewResult({ llm, prompt, routing, spec, plan, referenceAnalysi
       agentName: "Reviewer",
       step: 6,
       phase: "reviewing",
+      signal,
       run: () =>
         llm.chat({
           temperature: 0.2,
@@ -422,8 +440,9 @@ async function reviewResult({ llm, prompt, routing, spec, plan, referenceAnalysi
   return summary;
 }
 
-export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, sessionSnapshot = null, referenceImage = null, skills = [], aiConfig = { temperature: 0.1, maxIterations: 8, qualityMode: "balanced" }, onEvent = () => {} }) {
+export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, sessionSnapshot = null, referenceImage = null, skills = [], aiConfig = { temperature: 0.1, maxIterations: 8, qualityMode: "balanced" }, onEvent = () => {}, signal = null }) {
   const llm = new LLM({ provider, apiKey, model });
+  if (signal) llm.setCancelSignal(signal);
   if (referenceImage?.dataUrl && model && !modelSupportsVision(provider, model)) {
     throw new LLMConfigError(`${model} does not support image input. Pick a vision-capable model or remove the reference image.`);
   }
@@ -432,7 +451,7 @@ export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, se
   let routing, referenceAnalysis = "", spec, plan;
 
   const retryStep = (agentId, agentName, step, phase, run) =>
-    withRateLimitRetry({ onEvent, agentId, agentName, step, phase, run });
+    withRateLimitRetry({ onEvent, agentId, agentName, step, phase, run, signal });
 
   try {
     routing = await retryStep("router", "Router", 1, "routing", () => routeRequest({ llm, prompt, sessionSnapshot, onEvent }));
@@ -488,8 +507,9 @@ export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, se
     emitPipeline(onEvent, "building", 5);
     emitAgent(onEvent, "builder", "Builder", "running", "Building " + name + " with build123d.", { step: 5, totalSteps: 6, phase: "building", codeSnippet });
     onEvent("status", "Builder agent: building " + name + " ...");
-    const result = await generatePart({ name, pythonSource, modelsRoot });
+    const result = await generatePart({ name, pythonSource, modelsRoot, signal });
     lastResult = result;
+    if (result.canceled) throw canceledError();
     emitAgent(onEvent, "builder", "Builder", result.ok ? "done" : "error", result.ok ? "CAD build completed." : (result.error || "CAD build failed."), { step: 5, totalSteps: 6, phase: "building" });
     return result;
   }
@@ -506,6 +526,7 @@ export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, se
       agentName: "Builder",
       step: 5,
       phase: "building",
+      signal,
       run: async () => {
         try {
           let temp = aiConfig.temperature;
@@ -534,6 +555,7 @@ export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, se
   if (aiConfig.qualityMode === "thorough") iterationsLimit = Math.max(iterationsLimit, 12);
 
   for (let i = 0; i < iterationsLimit; i++) {
+    if (signal?.aborted) throw canceledError();
     iterationsUsed = i + 1;
     const message = await callModel();
     if (typeof message.reasoning_content === "string") {
@@ -583,7 +605,7 @@ export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, se
         let summary = "Part generated successfully.";
         if (aiConfig.qualityMode !== "fast") {
           onEvent("status", "Reviewer agent: checking the generated CAD ...");
-          summary = await reviewResult({ llm, prompt, routing, spec, plan, referenceAnalysis, result: lastOk, onEvent });
+          summary = await reviewResult({ llm, prompt, routing, spec, plan, referenceAnalysis, result: lastOk, onEvent, signal });
         } else {
           onEvent("status", "Reviewer agent: skipped in fast mode.");
         }
