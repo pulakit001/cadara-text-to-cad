@@ -1,0 +1,101 @@
+name: Build Cadara releases
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            target: win
+            arch: x64
+            artifact: win-x64
+          - name: macOS
+            os: macos-13
+            target: mac
+            arch: x64
+            artifact: mac-x64
+          - name: macOS Apple Silicon
+            os: macos-14
+            target: mac
+            arch: arm64
+            artifact: mac-arm64
+    defaults:
+      run:
+        working-directory: cadara
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cadara/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Node dependencies
+        run: npm ci
+
+      - name: Build bundled CAD runtime
+        shell: bash
+        run: |
+          python -m venv cad-runtime/.venv
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cad-runtime/.venv/Scripts/python -m pip install --upgrade pip
+            cad-runtime/.venv/Scripts/python -m pip install -r cad-runtime/requirements.txt
+          else
+            cad-runtime/.venv/bin/python -m pip install --upgrade pip
+            cad-runtime/.venv/bin/python -m pip install -r cad-runtime/requirements.txt
+          fi
+
+      - name: Build installer
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run dist -- --${{ matrix.target }} --${{ matrix.arch }}
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cadara-${{ matrix.artifact }}
+          path: cadara/dist/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download installers
+        uses: actions/download-artifact@v4
+        with:
+          path: release-files
+          merge-multiple: true
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          files: release-files/**

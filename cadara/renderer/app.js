@@ -97,9 +97,12 @@ const els = {
   historyClearBtn: document.getElementById("history-clear-btn"),
   modelSelect: document.getElementById("model-select"),
   settingsBtn: document.getElementById("settings-btn"),
+  helpBtn: document.getElementById("help-btn"),
   newChatBtn: document.getElementById("new-chat-btn"),
   modal: document.getElementById("modal"),
   settingsClose: document.getElementById("settings-close"),
+  helpModal: document.getElementById("help-modal"),
+  helpClose: document.getElementById("help-close"),
   settingsNavBtns: document.querySelectorAll('.settings-nav-btn'),
   settingsPanels: document.querySelectorAll('.settings-panel'),
   settingsContentTitle: document.getElementById("settings-content-title"),
@@ -1581,8 +1584,19 @@ els.aiConfigForm.addEventListener("submit", async (e) => {
 
 els.settingsClose.addEventListener("click", () => (els.modal.hidden = true));
 
+els.helpBtn.addEventListener("click", () => {
+  els.helpModal.hidden = false;
+  els.helpClose.focus();
+});
+
+els.helpClose.addEventListener("click", () => (els.helpModal.hidden = true));
+
 els.modal.addEventListener("click", (e) => {
   if (e.target === els.modal) els.modal.hidden = true;
+});
+
+els.helpModal.addEventListener("click", (e) => {
+  if (e.target === els.helpModal) els.helpModal.hidden = true;
 });
 
 // Removing old testKey and submit listeners, everything handled by new provider keys UI
@@ -1611,7 +1625,7 @@ els.exportBtn?.addEventListener("click", () => {
   if (!lastArtifact) return;
   els.exportPopup.hidden = false;
   els.exportProgress.hidden = true;
-  els.progressBarFill.style.width = "0%";
+  els.progressBarFill.style.transform = "scaleX(0)";
 });
 
 els.exportClose?.addEventListener("click", () => {
@@ -1626,7 +1640,7 @@ els.formatBtns.forEach((btn) => {
     
     // UI update
     els.exportProgress.hidden = false;
-    els.progressBarFill.style.width = "20%";
+    els.progressBarFill.style.transform = "scaleX(0.2)";
     els.progressStatus.textContent = "Initializing...";
     
     // Setup listener for progress
@@ -1634,7 +1648,7 @@ els.formatBtns.forEach((btn) => {
     if (cadara.file.onExportProgress) {
       unsub = cadara.file.onExportProgress((data) => {
         if (data.status === "converting") {
-          els.progressBarFill.style.width = "70%";
+          els.progressBarFill.style.transform = "scaleX(0.7)";
           els.progressStatus.textContent = "Converting format...";
         }
       });
@@ -1648,7 +1662,7 @@ els.formatBtns.forEach((btn) => {
       });
 
       if (res.ok) {
-        els.progressBarFill.style.width = "100%";
+        els.progressBarFill.style.transform = "scaleX(1)";
         els.progressStatus.textContent = "Export complete!";
         setTimeout(() => { els.exportPopup.hidden = true; }, 1500);
       } else if (res.canceled) {

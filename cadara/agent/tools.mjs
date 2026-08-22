@@ -3,12 +3,18 @@ import fs from "node:fs/promises";
 import { spawn } from "node:child_process";
 import os from "node:os";
 
-const SKILL_ROOT = path.resolve(import.meta.dirname, "..", "cad-runtime");
+const SKILL_ROOT = process.resourcesPath && !process.defaultApp
+  ? path.join(process.resourcesPath, "cad-runtime")
+  : path.resolve(import.meta.dirname, "..", "cad-runtime");
 
 async function resolvePython() {
   const configured = process.env.CAD_PYTHON;
+  const bundledPython = process.platform === "win32"
+    ? path.join(SKILL_ROOT, ".venv", "Scripts", "python.exe")
+    : path.join(SKILL_ROOT, ".venv", "bin", "python");
   const candidates = [
     configured,
+    bundledPython,
     path.join(os.homedir(), ".agents", "skills", "cad", ".venv", "bin", "python"),
     path.join(SKILL_ROOT, ".venv", "bin", "python"),
   ].filter(Boolean);

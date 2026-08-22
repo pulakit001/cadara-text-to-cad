@@ -61,7 +61,11 @@
         <button id="settings-btn" class="rail-btn" type="button" title="Settings" aria-label="Settings">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8.5a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7Z"/><path d="M19 12a7 7 0 0 0-.1-1.2l2-1.5-2-3.4-2.4 1a7 7 0 0 0-2-1.2L14.2 3h-4.4l-.3 2.7a7 7 0 0 0-2 1.2l-2.4-1-2 3.4 2 1.5A7 7 0 0 0 5 12c0 .4 0 .8.1 1.2l-2 1.5 2 3.4 2.4-1a7 7 0 0 0 2 1.2l.3 2.7h4.4l.3-2.7a7 7 0 0 0 2-1.2l2.4 1 2-3.4-2-1.5c.1-.4.1-.8.1-1.2Z"/></svg>
         </button>
-        <button class="rail-btn" type="button" title="Help" aria-label="Help">
+        <div class="maker-attribution" title="Built by the maker of Snipeds Labs">
+          <img src="./assets/snipeds-labs-logo.svg" alt="Snipeds Labs" />
+          <span>Built by the maker of Snipeds Labs.</span>
+        </div>
+        <button id="help-btn" class="rail-btn" type="button" title="Legal and help" aria-label="Legal and help">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9.5 9a2.6 2.6 0 0 1 5 1c0 2-2.5 2.2-2.5 4"/><path d="M12 18h.01"/><circle cx="12" cy="12" r="9"/></svg>
         </button>
       </div>
@@ -391,6 +395,51 @@
         </div>
       </div>
     </div>
+  </div>
+
+  <div id="help-modal" class="modal" hidden>
+    <section class="modal-card help-card" role="dialog" aria-modal="true" aria-labelledby="help-title">
+      <div class="content-header">
+        <div>
+          <h2 id="help-title">Legal &amp; Help</h2>
+          <p class="help-kicker">Cadara desktop application</p>
+        </div>
+        <button type="button" id="help-close" class="close-btn" aria-label="Close legal and help">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18"/></svg>
+        </button>
+      </div>
+      <div class="help-scroll">
+        <div class="help-section">
+          <h3>What Cadara does</h3>
+          <p>Cadara turns natural-language specifications into CAD proposals using the AI provider and model you choose. Geometry is generated locally by the CAD runtime when that runtime is installed.</p>
+        </div>
+        <div class="help-section">
+          <h3>Privacy and data handling</h3>
+          <p>API keys are stored locally using your operating system's secure storage when available. Prompts and reference images are sent to the selected AI provider to complete a request. Previous designs are stored locally in the app data directory. Review your provider's privacy, retention, and cross-border transfer terms before sharing confidential designs or personal data.</p>
+        </div>
+        <div class="help-section">
+          <h3>Generated CAD responsibility</h3>
+          <p>AI output can be incomplete, inaccurate, or unsuitable for manufacture. Check dimensions, units, tolerances, materials, clearances, safety factors, intellectual-property rights, and applicable standards with a qualified professional before production or safety-critical use.</p>
+        </div>
+        <div class="help-section">
+          <h3>India and other jurisdictions</h3>
+          <p>This notice is a product baseline, not legal advice. If Cadara is offered in India or processes personal data, publish a complete privacy notice and provide an appropriate contact or grievance route. Review the Digital Personal Data Protection Act, 2023 and rules in force, consent and withdrawal requirements, retention and deletion practices, security safeguards, children’s-data requirements, and any sector-specific obligations with qualified counsel.</p>
+          <div class="help-links">
+            <a href="https://www.indiacode.nic.in/handle/123456789/19598" target="_blank" rel="noreferrer">India Code: Digital Personal Data Protection Act, 2023</a>
+            <a href="https://www.meity.gov.in/data-protection-framework" target="_blank" rel="noreferrer">MeitY: Data protection framework</a>
+          </div>
+        </div>
+        <div class="help-section">
+          <h3>License and third-party services</h3>
+          <p>Cadara is provided under the MIT License. The AI providers, Python packages, Electron, and other dependencies have separate terms and licenses. You are responsible for complying with those terms and for securing your own API keys.</p>
+          <div class="help-links">
+            <a href="https://github.com/pulakit001/cadara-text-to-cad/blob/main/LICENSE" target="_blank" rel="noreferrer">Cadara license</a>
+            <a href="https://github.com/pulakit001/cadara-text-to-cad/issues" target="_blank" rel="noreferrer">Report a problem or request help</a>
+          </div>
+        </div>
+        <p class="help-disclaimer">Before a commercial launch, have the privacy notice, terms of use, software notices, data flows, export controls, and distribution signing reviewed for the markets where you operate.</p>
+      </div>
+    </section>
   </div>
 
   <script type="importmap">

@@ -76,8 +76,27 @@ npm start
 
 Click **Code → Download ZIP** on the GitHub page, unzip, then follow steps 2–5 above.
 
-<!-- ### Option 3 — Packaged Release (coming soon)
-Pre-built .dmg (macOS), .exe (Windows), and .AppImage (Linux) releases are planned. Star the repo to get notified! -->
+### Option 3 — Packaged Releases
+
+Tagged releases are built by GitHub Actions and publish platform installers to the GitHub Releases page:
+
+| Platform | Download | Format |
+|---|---|---|
+| Windows 10/11 | GitHub Releases | `.exe` NSIS installer |
+| macOS Intel | GitHub Releases | `.dmg` disk image |
+| macOS Apple Silicon | GitHub Releases | `.dmg` disk image |
+
+The installer includes the Electron application and the repository CAD runtime. The first launch still needs an API key from a provider listed below. Releases should be signed before public distribution: Windows uses an Authenticode certificate, and macOS uses an Apple Developer certificate plus notarization credentials. Unsigned builds may show operating-system security warnings.
+
+To create a release, update the version in `cadara/package.json`, commit the change, and push a tag:
+
+```bash
+cd cadara
+npm version patch
+git push origin main --follow-tags
+```
+
+The workflow runs on `v*` tags and produces the Windows installer and macOS DMG. Repository maintainers should configure `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID` as GitHub Actions secrets before treating an artifact as a public release. See [LEGAL.md](./LEGAL.md) for the release and compliance checklist.
 
 ## ✨ Features
 

@@ -1,11 +1,15 @@
 {
   "name": "cadara",
   "version": "0.1.0",
+  "author": "Snipeds Labs",
   "description": "Desktop CAD designer: describe a part, let an agent generate validated STEP, view it in 3D",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
-    "agent:test": "node agent/test-headless.mjs"
+    "agent:test": "node agent/test-headless.mjs",
+    "dist": "electron-builder --publish never",
+    "dist:mac": "electron-builder --mac dmg --publish never",
+    "dist:win": "electron-builder --win nsis --publish never"
   },
   "license": "MIT",
   "dependencies": {
@@ -13,6 +17,42 @@
     "three": "^0.164.1"
   },
   "devDependencies": {
-    "electron": "^43.3.0"
+    "electron": "^43.3.0",
+    "electron-builder": "^26.0.12"
+  },
+  "build": {
+    "appId": "com.snipedslabs.cadara",
+    "productName": "Cadara",
+    "icon": "renderer/assets/cadara-logo.png",
+    "asar": true,
+    "files": [
+      "**/*",
+      "!models{,/**/*}",
+      "!.env",
+      "!.env.*",
+      "!cad-runtime/.venv{,/**/*}"
+    ],
+    "artifactName": "Cadara-${version}-${os}-${arch}.${ext}",
+    "extraResources": [
+      {
+        "from": "cad-runtime",
+        "to": "cad-runtime",
+        "filter": ["scripts/**/*", "LICENSE", ".venv/**/*"]
+      }
+    ],
+    "mac": {
+      "category": "public.app-category.productivity",
+      "target": ["dmg"]
+    },
+    "win": {
+      "target": ["nsis"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
+    }
   }
 }

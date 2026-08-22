@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 44" role="img" aria-labelledby="title desc">
+  <title id="title">Snipeds Labs</title>
+  <desc id="desc">Snipeds Labs monogram and wordmark</desc>
+  <rect width="36" height="36" x="2" y="4" rx="8" fill="#d6ff55"/>
+  <path d="M26 13.5c-2.1-2.1-5.8-2.1-7.9 0l-2.2 2.2c-2.1 2.1-2.1 5.8 0 7.9l2.1 2.1c2.1 2.1 5.8 2.1 7.9 0M14 30.5c2.1 2.1 5.8 2.1 7.9 0l2.2-2.2c2.1-2.1 2.1-5.8 0-7.9L22 18.3c-2.1-2.1-5.8-2.1-7.9 0" fill="none" stroke="#0b0e14" stroke-linecap="round" stroke-width="3"/>
+  <text x="48" y="21" fill="#f1f1ef" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="12" font-weight="700" letter-spacing="1.2">SNIPEDS</text>
+  <text x="48" y="35" fill="#949494" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="10" font-weight="500" letter-spacing="2.3">LABS</text>
+</svg>

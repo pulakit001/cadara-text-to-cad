@@ -90,11 +90,22 @@ function getModelsRoot() {
   return path.join(app.getPath("userData"), "models");
 }
 
+function getBundledCadRuntime() {
+  return app.isPackaged && process.resourcesPath
+    ? path.join(process.resourcesPath, "cad-runtime")
+    : path.join(__dirname, "cad-runtime");
+}
+
 function getCadPython() {
-  return (
-    process.env.CAD_PYTHON ||
-    path.join(process.env.HOME || "", ".agents", "skills", "cad", ".venv", "bin", "python")
-  );
+  const runtime = getBundledCadRuntime();
+  const bundledPython = process.platform === "win32"
+    ? path.join(runtime, ".venv", "Scripts", "python.exe")
+    : path.join(runtime, ".venv", "bin", "python");
+  const developerPython = path.join(process.env.HOME || "", ".agents", "skills", "cad", ".venv", "bin", "python");
+  const candidates = app.isPackaged
+    ? [process.env.CAD_PYTHON, bundledPython]
+    : [process.env.CAD_PYTHON, path.join(runtime, ".venv", "bin", "python"), developerPython];
+  return candidates.find((candidate) => candidate && fs.existsSync(candidate)) || candidates.find(Boolean) || bundledPython;
 }
 
 /**
@@ -891,7 +902,7 @@ ipcMain.handle("file:export", async (event, { relPath, format, name } = {}) => {
     
     // Otherwise run the conversion script
     const python = getCadPython();
-    const script = path.join(__dirname, "cad-runtime", "scripts", "export_formats.py");
+    const script = path.join(getBundledCadRuntime(), "scripts", "export_formats.py");
     const dir = path.dirname(filePath);
     
     const { spawn } = require("node:child_process");
