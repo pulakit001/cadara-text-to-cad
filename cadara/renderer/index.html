@@ -215,6 +215,22 @@
               </button>
             </div>
             <textarea id="texture-input" rows="3" placeholder="Describe the finish — e.g. brushed aluminium, matte black powder coat, walnut grain, knurled grip"></textarea>
+            <div class="model-strip" style="padding-top: 8px;">
+              <label>
+                <span>AI</span>
+                <select id="texture-provider-select" title="AI provider">
+                  <option value="gemini">Gemini</option>
+                  <option value="groq">Groq</option>
+                  <option value="openai">OpenAI</option>
+                  <option value="claude">Claude</option>
+                  <option value="openrouter">OpenRouter</option>
+                </select>
+              </label>
+              <label>
+                <span>Model</span>
+                <select id="texture-model-select"></select>
+              </label>
+            </div>
             <div id="texture-status" class="texture-status" role="status"></div>
             <div class="texture-actions">
               <button id="texture-remove" class="texture-remove" type="button" hidden>Remove</button>

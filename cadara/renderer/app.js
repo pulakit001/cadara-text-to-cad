@@ -173,6 +173,8 @@ const els = {
   textureTab: document.getElementById("texture-tab"),
   textureStatus: document.getElementById("texture-status"),
   textureRemove: document.getElementById("texture-remove"),
+  textureProviderSelect: document.getElementById("texture-provider-select"),
+  textureModelSelect: document.getElementById("texture-model-select"),
   
   exportBtn: document.getElementById("export-btn"),
   exportPopup: document.getElementById("export-popup"),
@@ -266,6 +268,21 @@ function populateModels(provider) {
   updateReferenceControls();
 }
 
+function populateTextureModels(provider) {
+  const catalog = providerCatalogs[provider] || FALLBACK_CATALOGS[provider] || [];
+  els.textureModelSelect.innerHTML = "";
+  catalog.forEach((m) => {
+    const opt = document.createElement("option");
+    opt.value = m.id;
+    opt.textContent = compactModelLabel(provider, m.id);
+    opt.title = m.label || m.id;
+    els.textureModelSelect.appendChild(opt);
+  });
+  if (catalog.length > 0) {
+    els.textureModelSelect.value = catalog[0].id;
+  }
+}
+
 function compactModelLabel(provider, modelId) {
   if (provider === "gemini") {
     return modelId
@@ -298,6 +315,7 @@ function currentProvider() {
 
 function init() {
   populateProviderControls(els.providerSelect.value || "gemini");
+  populateTextureModels(els.textureProviderSelect.value || "gemini");
   els.providerSelect.addEventListener("change", () => {
     populateProviderControls(currentProvider());
   });
@@ -328,6 +346,7 @@ function init() {
       if (withKey) els.providerSelect.value = withKey[0];
     }
     populateProviderControls(currentProvider());
+    populateTextureModels(els.textureProviderSelect.value);
   });
 
   cadara.settings.getKeys().then((keys) => {
@@ -379,6 +398,17 @@ function init() {
       e.preventDefault();
       els.artifactName.blur();
     }
+  });
+
+  els.prompt.addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      requestDesign();
+    }
+  });
+
+  els.textureProviderSelect.addEventListener("change", (e) => {
+    populateTextureModels(e.target.value);
   });
 
   unsubEvents = cadara.chat.onEvent(handleEvent);
@@ -685,7 +715,6 @@ async function openPreviousChat(item) {
     if (item.summary) addMessage("assistant", item.summary, { record: false });
   }
   if (item.artifact) showArtifact(item.artifact);
-  addMessage("system", "Opened a previous design for review. Press + to keep the next request fresh.", { record: false });
 }
 
 function clearActiveDesignView({ clearTranscript = false } = {}) {
@@ -893,7 +922,7 @@ async function requestTexture() {
   els.textureOk.textContent = "Applying…";
   setTextureStatus("Sending the texture brief to the engine…");
   try {
-    const res = await cadara.texture.generate(description, currentProvider(), els.modelSelect.value, {
+    const res = await cadara.texture.generate(description, els.textureProviderSelect.value, els.textureModelSelect.value, {
       slug: lastArtifact.slug,
       displayName: lastArtifact.displayName || lastArtifact.slug,
       facts: lastArtifact.facts || null,
