@@ -88,6 +88,14 @@ const FALLBACK_CATALOGS = {
     { id: "claude-sonnet-4-5", label: "claude-sonnet-4-5 — balanced · mid Claude cost tier", supportsVision: true },
     { id: "claude-opus-4-1", label: "claude-opus-4-1 — ultra · highest Claude quality tier", supportsVision: true },
   ],
+  openrouter: [
+    { id: "google/gemini-2.5-flash", label: "google/gemini-2.5-flash — balanced · tool calling", supportsVision: true },
+    { id: "openai/gpt-4.1-mini", label: "openai/gpt-4.1-mini — efficient · tool calling", supportsVision: true },
+    { id: "anthropic/claude-haiku-4.5", label: "anthropic/claude-haiku-4.5 — efficient · tool calling", supportsVision: true },
+    { id: "meta-llama/llama-3.3-70b-instruct", label: "meta-llama/llama-3.3-70b-instruct — balanced · tool calling", supportsVision: false },
+    { id: "anthropic/claude-sonnet-4.5", label: "anthropic/claude-sonnet-4.5 — flagship · tool calling", supportsVision: true },
+    { id: "google/gemini-2.5-pro", label: "google/gemini-2.5-pro — flagship · tool calling", supportsVision: true },
+  ],
 };
 
 const FALLBACK_PACKETS = {
@@ -115,6 +123,11 @@ const FALLBACK_PACKETS = {
     { id: "claude-efficient", label: "Claude Efficient", cost: "lowest", priceNote: "Lowest Claude preset.", description: "Cheap drafting and spec cleanup.", model: "claude-haiku-4-5", supportsVision: true },
     { id: "claude-performance", label: "Claude Performance", cost: "medium", priceNote: "Higher cost, stronger planning.", description: "Careful multi-step CAD plans.", model: "claude-sonnet-4-5", supportsVision: true },
     { id: "claude-ultra", label: "Claude Ultra", cost: "highest", priceNote: "Highest Claude quality/cost preset.", description: "Complex specs and image-guided CAD.", model: "claude-opus-4-1", supportsVision: true },
+  ],
+  openrouter: [
+    { id: "or-efficient", label: "OR Efficient", cost: "lowest", priceNote: "Low cost models via OpenRouter.", description: "Cheap drafting and simple CAD generation.", model: "google/gemini-2.5-flash", supportsVision: true },
+    { id: "or-performance", label: "OR Performance", cost: "medium", priceNote: "Balanced cost and capability.", description: "Strong CAD reasoning from flagship models.", model: "anthropic/claude-sonnet-4.5", supportsVision: true },
+    { id: "or-ultra", label: "OR Ultra", cost: "highest", priceNote: "Premium models via OpenRouter.", description: "Complex logic and geometry.", model: "google/gemini-2.5-pro", supportsVision: true },
   ],
 };
 
@@ -241,10 +254,10 @@ let activeClientJobId = null;
 let runSerial = 0;
 let retryTimer = null;
 const agentState = new Map();
-const providerCatalogs = { gemini: null, zai: null, qwen: null, openai: null, claude: null };
-const providerPackets = { gemini: null, zai: null, qwen: null, openai: null, claude: null };
-const selectedModelByProvider = { gemini: null, zai: null, qwen: null, openai: null, claude: null };
-const selectedPacketByProvider = { gemini: null, zai: null, qwen: null, openai: null, claude: null };
+const providerCatalogs = { gemini: null, zai: null, qwen: null, openai: null, claude: null, openrouter: null };
+const providerPackets = { gemini: null, zai: null, qwen: null, openai: null, claude: null, openrouter: null };
+const selectedModelByProvider = { gemini: null, zai: null, qwen: null, openai: null, claude: null, openrouter: null };
+const selectedPacketByProvider = { gemini: null, zai: null, qwen: null, openai: null, claude: null, openrouter: null };
 
 // Pipeline dashboard state
 let pipelineStartedAt = null;

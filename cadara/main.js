@@ -219,7 +219,7 @@ function createWindow() {
                     chip: chip?.textContent || "",
                     artifactName: q("#artifact-name")?.textContent || "",
                     artifactDims: q("#artifact-dims")?.textContent || "",
-                    chatMessages: q("#chat")?.children.length ?? -1,
+                    chatMessages: document.querySelector("#chat")?.children.length ?? -1,
                     errorLog: window.__errors || [],
                   });
                 } else {
@@ -485,6 +485,14 @@ async function probeProviderKey(providerId, key) {
           messages: [{ role: "user", content: "ping" }],
           max_tokens: 1,
         }),
+        signal: AbortSignal.timeout(20000),
+      });
+    } else if (providerId === "openrouter") {
+      // OpenRouter's /models endpoint is public — it returns 200 even for
+      // bogus keys, so validate against the key-bound /key endpoint.
+      const { PROVIDERS } = await import("./agent/llm.mjs");
+      res = await fetch(PROVIDERS.openrouter.baseUrl + "/key", {
+        headers: { Authorization: `Bearer ${key}` },
         signal: AbortSignal.timeout(20000),
       });
     } else {
@@ -970,7 +978,10 @@ ipcMain.handle("app:meta", async () => {
   const providers = {};
   for (const provider of Object.values(PROVIDERS)) {
     const key = keyFor(provider);
-    const models = key ? await listModels(provider.id, key) : null;
+    // OpenRouter's model catalog is public — fetch it even without a
+    // stored key so the dropdown is never empty.
+    const models =
+      key || provider.id === "openrouter" ? await listModels(provider.id, key) : null;
     providers[provider.id] = {
       label: provider.label,
       hasKey: Boolean(key),
