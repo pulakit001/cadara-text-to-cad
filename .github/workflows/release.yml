@@ -69,9 +69,15 @@ jobs:
             mac-x64)   TRIPLE="x86_64-apple-darwin" ;;
             win-x64)   TRIPLE="x86_64-pc-windows-msvc" ;;
           esac
-          ASSET_URL=$(curl -sfL --retry 5 --retry-delay 5 --retry-all-errors "https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/${PBS_TAG}" \
-            | jq -r --arg tag "$PBS_TAG" --arg triple "$TRIPLE" \
-                '[.assets[] | select(.name | startswith("cpython-3.12") and endswith("+" + $tag + "-" + $triple + "-install_only.tar.gz"))][0].browser_download_url // empty')
+          ASSET_URL=""
+          for attempt in 1 2 3 4 5; do
+            ASSET_URL=$(curl -sfL --retry 5 --retry-delay 5 --retry-all-errors "https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/${PBS_TAG}" 2>/dev/null \
+              | jq -r --arg tag "$PBS_TAG" --arg triple "$TRIPLE" \
+                  '[.assets[] | select(.name | startswith("cpython-3.12") and endswith("+" + $tag + "-" + $triple + "-install_only.tar.gz"))][0].browser_download_url // empty' || true)
+            if [ -n "$ASSET_URL" ]; then break; fi
+            echo "Release API attempt $attempt failed; retrying"
+            sleep 5
+          done
           if [ -z "$ASSET_URL" ]; then
             echo "::error::No matching cpython-3.12 install_only asset for ${TRIPLE} in tag ${PBS_TAG}"
             exit 1
