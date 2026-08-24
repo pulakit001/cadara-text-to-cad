@@ -23,7 +23,9 @@ jobs:
             arch: x64
             artifact: win-x64
           - name: macOS
-            os: macos-13
+            # macos-13 (Intel) was retired Dec 2025 and jobs sit queued
+            # forever; macos-15-intel is the supported x86_64 label.
+            os: macos-15-intel
             target: mac
             arch: x64
             artifact: mac-x64
