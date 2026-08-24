@@ -67,7 +67,7 @@ jobs:
             mac-x64)   TRIPLE="x86_64-apple-darwin" ;;
             win-x64)   TRIPLE="x86_64-pc-windows-msvc" ;;
           esac
-          ASSET_URL=$(curl -sfL "https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/${PBS_TAG}" \
+          ASSET_URL=$(curl -sfL --retry 5 --retry-delay 5 --retry-all-errors "https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/${PBS_TAG}" \
             | jq -r --arg tag "$PBS_TAG" --arg triple "$TRIPLE" \
                 '[.assets[] | select(.name | startswith("cpython-3.12") and endswith("+" + $tag + "-" + $triple + "-install_only.tar.gz"))][0].browser_download_url // empty')
           if [ -z "$ASSET_URL" ]; then
@@ -75,7 +75,7 @@ jobs:
             exit 1
           fi
           echo "Downloading $ASSET_URL"
-          curl -fL "$ASSET_URL" -o python-dist.tar.gz
+          curl -fL --retry 5 --retry-delay 5 --retry-all-errors "$ASSET_URL" -o python-dist.tar.gz
           mkdir -p cad-runtime/python-dist
           tar -xzf python-dist.tar.gz -C cad-runtime/python-dist --strip-components=1
           rm -f python-dist.tar.gz
