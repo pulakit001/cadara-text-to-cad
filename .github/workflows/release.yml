@@ -171,5 +171,5 @@ jobs:
             irm https://raw.githubusercontent.com/pulakit001/cadara-text-to-cad/main/install.ps1 | iex
             ```
 
-            Or download an installer below.
+            This is the only supported installation method.
           files: release-files/**
