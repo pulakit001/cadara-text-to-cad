@@ -82,15 +82,19 @@ jobs:
 
       - name: Install CAD runtime dependencies
         shell: bash
+        # requirements.txt references the local cadpy package via a path
+        # relative to cad-runtime/ (matches the README dev setup), so run
+        # pip from inside cad-runtime/.
+        working-directory: cadara/cad-runtime
         run: |
           if [ "$RUNNER_OS" = "Windows" ]; then
-            PY="cad-runtime/python-dist/python.exe"
+            PY="python-dist/python.exe"
           else
-            PY="cad-runtime/python-dist/bin/python3"
+            PY="python-dist/bin/python3"
           fi
           "$PY" --version
           "$PY" -m pip install --upgrade pip
-          "$PY" -m pip install --target cad-runtime/pylibs -r cad-runtime/requirements.txt
+          "$PY" -m pip install --target pylibs -r requirements.txt
 
       - name: Build installer
         env:
