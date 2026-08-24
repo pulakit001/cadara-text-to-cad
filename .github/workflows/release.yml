@@ -109,7 +109,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Cadara-${{ matrix.artifact }}
-          path: cadara/dist/*
+          # Only installers: dist/ also contains the unpacked .app bundle
+          # (with the whole bundled Python runtime) and intermediates.
+          path: |
+            cadara/dist/**/*.exe
+            cadara/dist/**/*.dmg
+            cadara/dist/**/*.blockmap
           if-no-files-found: error
 
   publish:
