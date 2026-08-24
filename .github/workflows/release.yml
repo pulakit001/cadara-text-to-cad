@@ -97,16 +97,10 @@ jobs:
           "$PY" -m pip install --target pylibs -r requirements.txt
 
       - name: Build installer
-        env:
-          CSC_LINK: ${{ secrets.CSC_LINK }}
-          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-          # Skip keychain identity discovery when no signing cert is
-          # configured, so unsigned CI builds don't die on
-          # "Cannot find valid identity". CSC_LINK still wins if set.
-          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK == '' && 'false' || 'true' }}
+        # No CSC_*/APPLE_* env vars here on purpose: mapping an unset
+        # secret produces an empty-string CSC_LINK, which electron-builder
+        # treats as a relative cert path and dies with "<dir> not a file".
+        # With no signing vars at all it cleanly skips macOS signing.
         run: npm run dist -- --${{ matrix.target }} --${{ matrix.arch }}
 
       - name: Upload installer artifact
