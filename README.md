@@ -35,7 +35,23 @@ It's built for makers, engineers, students, and product teams who want idea → 
 
 ## 📥 Download & Install
 
-### Option 1 — Installers (easiest)
+### Option 1 — One-line terminal install (easiest)
+
+**macOS** (Terminal):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/pulakit001/cadara-text-to-cad/main/install.sh | bash
+```
+
+**Windows** (PowerShell):
+
+```powershell
+irm https://raw.githubusercontent.com/pulakit001/cadara-text-to-cad/main/install.ps1 | iex
+```
+
+The script detects your platform, downloads the latest release, and installs it (macOS → `/Applications`, Windows → silent NSIS install).
+
+### Option 2 — Manual installers
 
 Grab a one-click installer from the [**Releases page**](https://github.com/pulakit001/cadara-text-to-cad/releases/latest). Every tagged release ships:
 
@@ -49,7 +65,7 @@ Installers bundle the Electron app and the Python CAD runtime. On first launch, 
 
 > Unsigned builds may show OS security warnings (right-click → Open on macOS). Maintainers configure `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_ID`, `APPLE_APP_SPECIFIC_PASSWORD`, and `APPLE_TEAM_ID` secrets before public releases. See [LEGAL.md](./LEGAL.md) for the compliance checklist.
 
-### Option 2 — Clone & Run (developers)
+### Option 3 — Clone & Run (developers)
 
 ```bash
 # 1. Clone

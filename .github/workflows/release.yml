@@ -129,11 +129,11 @@ jobs:
           # Only electron-builder's installers (artifactName is
           # Cadara-${version}-${os}-${arch}): dist/ also holds the
           # unpacked app bundle (Cadara.exe, bundled python.exe, pylibs)
-          # whose files must never leak into artifacts.
+          # whose files must never leak into artifacts. Blockmaps are
+          # intentionally excluded to keep the release page clean.
           path: |
             cadara/dist/**/Cadara-*.exe
             cadara/dist/**/Cadara-*.dmg
-            cadara/dist/**/Cadara-*.blockmap
           if-no-files-found: error
 
   publish:
@@ -152,4 +152,18 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           generate_release_notes: true
+          body: |
+            ## Install from your terminal
+
+            **macOS**
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/pulakit001/cadara-text-to-cad/main/install.sh | bash
+            ```
+
+            **Windows (PowerShell)**
+            ```powershell
+            irm https://raw.githubusercontent.com/pulakit001/cadara-text-to-cad/main/install.ps1 | iex
+            ```
+
+            Or download an installer below.
           files: release-files/**
