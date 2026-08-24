@@ -67,19 +67,13 @@ jobs:
             mac-x64)   TRIPLE="x86_64-apple-darwin" ;;
             win-x64)   TRIPLE="x86_64-pc-windows-msvc" ;;
           esac
-          ASSET_URL=$(curl -sfL "https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/${PBS_TAG}" | python3 -c "
-import json, sys
-tag = '${PBS_TAG}'.strip()
-triple = '${TRIPLE}'.strip()
-data = json.load(sys.stdin)
-for asset in data.get('assets', []):
-    name = asset['name']
-    if name.startswith('cpython-3.12') and name.endswith(f'+{tag}-{triple}-install_only.tar.gz'):
-        print(asset['browser_download_url'])
-        break
-else:
-    sys.exit('No matching cpython-3.12 install_only asset for ' + triple)
-")
+          ASSET_URL=$(curl -sfL "https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/${PBS_TAG}" \
+            | jq -r --arg tag "$PBS_TAG" --arg triple "$TRIPLE" \
+                '[.assets[] | select(.name | startswith("cpython-3.12") and endswith("+" + $tag + "-" + $triple + "-install_only.tar.gz"))][0].browser_download_url // empty')
+          if [ -z "$ASSET_URL" ]; then
+            echo "::error::No matching cpython-3.12 install_only asset for ${TRIPLE} in tag ${PBS_TAG}"
+            exit 1
+          fi
           echo "Downloading $ASSET_URL"
           curl -fL "$ASSET_URL" -o python-dist.tar.gz
           mkdir -p cad-runtime/python-dist
@@ -105,6 +99,10 @@ else:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          # Skip keychain identity discovery when no signing cert is
+          # configured, so unsigned CI builds don't die on
+          # "Cannot find valid identity". CSC_LINK still wins if set.
+          CSC_IDENTITY_AUTO_DISCOVERY: ${{ secrets.CSC_LINK == '' && 'false' || 'true' }}
         run: npm run dist -- --${{ matrix.target }} --${{ matrix.arch }}
 
       - name: Upload installer artifact
