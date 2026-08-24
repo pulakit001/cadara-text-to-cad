@@ -77,7 +77,24 @@ jobs:
             exit 1
           fi
           echo "Downloading $ASSET_URL"
-          curl -fL --retry 5 --retry-delay 5 --retry-all-errors "$ASSET_URL" -o python-dist.tar.gz
+          # GitHub CDN connections occasionally reset mid-transfer
+          # (curl exit 56): resume partial downloads, validate the
+          # archive, and retry the whole thing a few times.
+          DOWNLOAD_OK=0
+          for attempt in 1 2 3 4 5; do
+            if curl -fL --continue-at - --retry 5 --retry-delay 5 --retry-all-errors "$ASSET_URL" -o python-dist.tar.gz \
+              && tar -tzf python-dist.tar.gz > /dev/null 2>&1; then
+              DOWNLOAD_OK=1
+              break
+            fi
+            echo "Download attempt $attempt failed or archive corrupt; retrying"
+            rm -f python-dist.tar.gz
+            sleep 5
+          done
+          if [ "$DOWNLOAD_OK" != "1" ]; then
+            echo "::error::Failed to download a valid archive from $ASSET_URL"
+            exit 1
+          fi
           mkdir -p cad-runtime/python-dist
           tar -xzf python-dist.tar.gz -C cad-runtime/python-dist --strip-components=1
           rm -f python-dist.tar.gz
