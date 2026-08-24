@@ -109,12 +109,14 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: Cadara-${{ matrix.artifact }}
-          # Only installers: dist/ also contains the unpacked .app bundle
-          # (with the whole bundled Python runtime) and intermediates.
+          # Only electron-builder's installers (artifactName is
+          # Cadara-${version}-${os}-${arch}): dist/ also holds the
+          # unpacked app bundle (Cadara.exe, bundled python.exe, pylibs)
+          # whose files must never leak into artifacts.
           path: |
-            cadara/dist/**/*.exe
-            cadara/dist/**/*.dmg
-            cadara/dist/**/*.blockmap
+            cadara/dist/**/Cadara-*.exe
+            cadara/dist/**/Cadara-*.dmg
+            cadara/dist/**/Cadara-*.blockmap
           if-no-files-found: error
 
   publish:
