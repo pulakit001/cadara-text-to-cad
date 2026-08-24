@@ -1,6 +1,6 @@
 {
   "name": "cadara",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "author": "Snippetz Labs",
   "description": "Desktop CAD designer: describe a part, let an agent generate validated STEP, view it in 3D",
   "main": "main.js",

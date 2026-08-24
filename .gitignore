@@ -42,6 +42,10 @@ out/
 
 # ── Vendored libraries (Three.js etc.) ──
 vendor/
+# ...except the packaged renderer addons: electron-builder drops
+# three/examples/ from node_modules, so these must live in the repo.
+!cadara/renderer/assets/vendor/
+!cadara/renderer/assets/vendor/**
 
 # ── Python egg-info ──
 **/*.egg-info/
