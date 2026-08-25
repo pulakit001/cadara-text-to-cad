@@ -451,7 +451,9 @@ function init() {
   els.prompt.addEventListener("keydown", (e) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      requestDesign();
+      // Submit through the form so the single send path in the submit
+      // listener handles validation, busy-state and clearing.
+      els.promptForm.requestSubmit();
     }
   });
 

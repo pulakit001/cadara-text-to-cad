@@ -3,3 +3,6 @@ node_modules/
 models/
 *.log
 .DS_Store
+dist/
+__pycache__/
+*.egg-info/

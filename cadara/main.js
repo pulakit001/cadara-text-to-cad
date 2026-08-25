@@ -188,16 +188,23 @@ function createWindow() {
             const out = {};
             if (${noKey ? "false" : "true"} && ${JSON.stringify(testKey)}) {
               document.getElementById("settings-btn").click();
-              await sleep(300);
-              document.getElementById("gemini-key").value = ${JSON.stringify(testKey)};
-              document.getElementById("test-key-gemini").click();
-              await sleep(4000);
-              out.testNote = document.getElementById("settings-note").textContent;
-              document.getElementById("settings-form").dispatchEvent(new Event("submit", { cancelable: true }));
-              await sleep(1800);
+              await sleep(400);
+              // Multi-provider settings UI: open the add-key dialog for
+              // Gemini, fill it, and submit (addKey validates + stores).
+              const addBtn = document.querySelector('.add-key-btn[data-provider="gemini"]');
+              if (addBtn) {
+                addBtn.click();
+                await sleep(200);
+                document.getElementById("add-key-label").value = "E2E";
+                document.getElementById("add-key-value").value = ${JSON.stringify(testKey)};
+                document.getElementById("add-key-form").dispatchEvent(new Event("submit", { cancelable: true }));
+                await sleep(2500);
+              }
               out.modalHiddenAfterSave = document.getElementById("modal").hidden;
               out.chatAfterSave = document.getElementById("chat").children.length;
               out.suggestionsVisible = !document.getElementById("suggestions").hidden;
+              document.getElementById("settings-close").click();
+              await sleep(300);
             }
             const ta = document.getElementById("prompt");
             ta.value = ${JSON.stringify(prompt)};
@@ -574,9 +581,9 @@ function normalizeReferenceImage(input) {
 
 // ---------- IPC ----------
 
-ipcMain.handle("settings:getKeys", () => {
+const maskedKeysForProviders = () => {
   const s = readSettings({ purgeBadKeys: true });
-  
+
   // Return masked keys
   const maskedKeys = {};
   for (const p of PROVIDER_IDS) {
@@ -588,12 +595,20 @@ ipcMain.handle("settings:getKeys", () => {
       }
       return { id: k.id, label: k.label, key: displayKey, active: k.active, isEnv };
     });
-    
+
     // Also include env keys if they exist and no stored key is active?
     // Actually, just keep it simple: UI shows what's in settings.
   }
   return maskedKeys;
+};
+
+ipcMain.handle("settings:get", () => {
+  // Same masked payload as settings:getKeys; exists so the exposed
+  // preload API has a real handler (renderer previously never called it).
+  return maskedKeysForProviders();
 });
+
+ipcMain.handle("settings:getKeys", () => maskedKeysForProviders());
 
 ipcMain.handle("settings:addKey", (_event, { provider, label, key }) => {
   if (!PROVIDER_IDS.includes(provider) || !key || !key.trim()) return { ok: false, error: "Invalid key." };
