@@ -125,7 +125,8 @@ jobs:
         # No CSC_*/APPLE_* env vars here on purpose: mapping an unset
         # secret produces an empty-string CSC_LINK, which electron-builder
         # treats as a relative cert path and dies with "<dir> not a file".
-        # With no signing vars at all it cleanly skips macOS signing.
+        # With identity="-" in package.json, it forces ad-hoc macOS signing
+        # to prevent Gatekeeper "damaged" errors.
         run: npm run dist -- --${{ matrix.target }} --${{ matrix.arch }}
 
       - name: Upload installer artifact
