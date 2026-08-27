@@ -519,6 +519,128 @@ svg {
   color: #7d7d7d;
 }
 
+/* ---------- tune panel (design constraints sliders) ---------- */
+
+.tune-panel {
+  margin-bottom: 12px;
+  padding: 12px 14px;
+  border: 1px solid #303030;
+  border-radius: 16px;
+  background: #232323;
+}
+
+.tune-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+}
+
+.tune-title {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.tune-grid {
+  display: grid;
+  gap: 8px;
+}
+
+.tune-row {
+  display: grid;
+  grid-template-columns: 104px minmax(0, 1fr) 72px;
+  align-items: center;
+  gap: 10px;
+}
+
+.tune-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tune-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 3px;
+  border-radius: 999px;
+  background: #3d3d3d;
+  outline: none;
+  cursor: pointer;
+}
+
+.tune-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 13px;
+  height: 13px;
+  border-radius: 999px;
+  background: #dcdcdc;
+  border: 0;
+  transition: transform 0.15s ease;
+}
+
+.tune-slider:hover::-webkit-slider-thumb,
+.tune-slider:focus-visible::-webkit-slider-thumb {
+  transform: scale(1.15);
+  background: #fff;
+}
+
+.tune-slider:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.tune-value {
+  font-size: 10px;
+  color: var(--text-faint);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tune-row.touched .tune-value {
+  color: var(--text);
+}
+
+.tune-note {
+  margin-top: 10px;
+  font-size: 10px;
+  color: var(--text-faint);
+}
+
+#tune-btn {
+  position: relative;
+}
+
+#tune-btn.active {
+  background: #383838;
+  color: #fff;
+}
+
+#tune-btn.tuned {
+  color: #fff;
+}
+
+#tune-btn.tuned::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--run);
+}
+
 .composer-row {
   display: flex;
   align-items: center;
@@ -2033,11 +2155,136 @@ svg {
   z-index: 50;
 }
 
+/* ---------- details drawer ---------- */
+
+.details-drawer {
+  position: absolute;
+  top: 64px;
+  right: 20px;
+  bottom: 20px;
+  width: 340px;
+  display: flex;
+  flex-direction: column;
+  background: #191919;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+  z-index: 50;
+  overflow: hidden;
+}
+
+.details-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--line-soft);
+}
+
+.details-head h3 {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.details-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 14px 16px;
+}
+
+.details-section {
+  margin-bottom: 16px;
+}
+
+.details-section h4 {
+  margin: 0 0 6px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-faint);
+}
+
+.details-section p {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #cfcfcf;
+  white-space: pre-wrap;
+}
+
+.details-section ul {
+  margin: 0;
+  padding-left: 16px;
+  display: grid;
+  gap: 4px;
+}
+
+.details-section li {
+  font-size: 12px;
+  line-height: 1.45;
+  color: #cfcfcf;
+}
+
+.details-facts {
+  margin: 0;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 4px 12px;
+}
+
+.details-facts dt {
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.details-facts dd {
+  margin: 0;
+  font-size: 11px;
+  color: #cfcfcf;
+  font-variant-numeric: tabular-nums;
+  word-break: break-word;
+}
+
 .export-head {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 16px;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+
+.export-hint {
+  margin-top: 10px;
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--text-faint);
+}
+
+.export-done {
+  margin-top: 10px;
+  display: grid;
+  gap: 6px;
+}
+
+.export-path {
+  font-size: 10px;
+  color: var(--text-muted);
+  word-break: break-all;
+  line-height: 1.4;
+}
+
+.export-done .text-btn {
+  justify-self: start;
+  padding: 0;
+  color: #dcdcdc;
+  font-size: 11px;
+}
+
+.export-done .text-btn:hover {
+  color: #fff;
+  text-decoration: underline;
 }
 
 .export-head h3 {

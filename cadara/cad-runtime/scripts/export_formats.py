@@ -91,6 +91,18 @@ def _write_3mf(path, verts, tris):
         z.writestr("3D/3dmodel.model", model)
 
 
+def _project_top(part):
+    """Project a 3D shape into clean 2D edges looking down -Z (top view).
+
+    Feeding a Solid straight into ExportDXF/ExportSVG makes build123d warn
+    about out-of-plane points and produce distorted drawings; projecting to
+    a proper viewport first yields correct engineering output.
+    Returns (visible_edges, hidden_edges).
+    """
+    eye_height = max(1000.0, part.bounding_box().size.Z * 10.0)
+    return part.project_to_viewport(viewport_origin=(0, 0, eye_height))
+
+
 def export_format(step_path, fmt, output_path):
     import build123d as bd
     from build123d.exporters import ExportDXF, ExportSVG
@@ -122,12 +134,14 @@ def export_format(step_path, fmt, output_path):
 
         elif fmt == "dxf":
             exporter = ExportDXF(unit=bd.Unit.MM)
-            exporter.add_shape(part)
+            exporter.add_layer("Hidden")
+            exporter.add_shape(bd.Compound(children=list(_project_top(part)[0])))
             exporter.write(output_path)
 
         elif fmt == "svg":
             exporter = ExportSVG(unit=bd.Unit.MM)
-            exporter.add_shape(part)
+            exporter.add_layer("Hidden")
+            exporter.add_shape(bd.Compound(children=list(_project_top(part)[0])))
             exporter.write(output_path)
 
         else:

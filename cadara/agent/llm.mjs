@@ -1,4 +1,5 @@
 import "dotenv/config";
+import fs from "node:fs";
 
 // Multi-provider LLM client. Gemini, Z.AI, Qwen, and OpenAI use
 // OpenAI-compatible chat endpoints here; Claude uses Anthropic's Messages
@@ -94,12 +95,80 @@ function messagesContainImage(messages = []) {
 }
 
 export class LLMRateLimitError extends Error {
-  constructor(message = "This model is rate-limited right now. Try again in a moment or pick another model.", retryAfterMs = null) {
+  constructor(
+    message = "This model is rate-limited right now. Try again in a moment or pick another model.",
+    retryAfterMs = null,
+    info = {}
+  ) {
     super(message);
     this.name = "LLMRateLimitError";
     this.rateLimited = true;
     this.retryAfterMs = retryAfterMs;
+    // Structured quota facts parsed from the provider's error body:
+    // "minute" limits can be waited out mid-run; "day"/"account"/null scopes
+    // with long Retry-After windows cannot, so callers must escalate fast.
+    this.quotaScope = info.quotaScope || null;
+    this.quotaReason = info.quotaReason || "";
+    this.providerDetail = info.providerDetail || "";
+    this.unwaitable =
+      this.quotaScope === "day" ||
+      this.quotaScope === "account" ||
+      (this.retryAfterMs != null && this.retryAfterMs > RATE_LIMIT_WAITABLE_CEILING_MS);
   }
+}
+
+// Extracts structured quota facts from provider error bodies so the app can
+// distinguish a per-minute blip (worth waiting out) from an exhausted daily
+// pool or empty account balance (never worth waiting for inside this run).
+export function describeRateLimitBody(status, bodyText) {
+  const out = { retryAfterMs: null, quotaScope: null, quotaReason: "", detail: "" };
+  let data = null;
+  try {
+    data = JSON.parse(String(bodyText || ""));
+  } catch {}
+  const err = data?.error || {};
+  out.detail = String(err.message || "").slice(0, 500);
+  const details = Array.isArray(err.details) ? err.details : [];
+  for (const d of details) {
+    const type = String(d["@type"] || "");
+    if (/RetryInfo/.test(type)) {
+      const secs =
+        typeof d.retryDelay === "string" && /^(\d+(?:\.\d+)?)s$/.test(d.retryDelay)
+          ? parseFloat(d.retryDelay)
+          : Number.isFinite(d.retryDelay)
+            ? Number(d.retryDelay)
+            : NaN;
+      if (Number.isFinite(secs)) out.retryAfterMs = Math.round(secs * 1000);
+    }
+    if (/QuotaFailure|ErrorInfo/.test(type)) {
+      for (const v of d.violations || []) {
+        const metric = String(v.quotaMetric || v.subject || v.description || "");
+        if (/PerDay/i.test(metric)) out.quotaScope = "day";
+        else if (!out.quotaScope && /(PerMinute|\bRPM\b)/i.test(metric)) out.quotaScope = "minute";
+        if (!out.quotaReason && metric) out.quotaReason = metric.slice(0, 200);
+      }
+      if (typeof d.quotaId === "string" && /PerDay/i.test(d.quotaId)) out.quotaScope = "day";
+    }
+  }
+  // Message heuristics cover OpenAI-compatible providers without structured
+  // quota payloads (OpenRouter, DashScope, Z.AI …).
+  if (!out.quotaScope) {
+    const m = out.detail;
+    // Empty wallet / credit preflight failures first — these look like plain
+    // HTTP 400s but nothing time-based can fix them.
+    if (/requires more credits|can only afford|insufficient credits/i.test(m)) {
+      out.quotaScope = "account";
+    } else if (/per[\s_-]?day|\bexisting monthly|\bdaily\b|(?:requests?|tokens?)\s*per\s*day/i.test(m)) {
+      out.quotaScope = "day";
+    } else if (/quota.*(exhausted|exceeded).*(day|monthly)|out of free (credits|requests)/i.test(m)) {
+      out.quotaScope = "day";
+    } else if (/(insufficient|no more)\s+(credits?|balance|funds?)|monthly limit/i.test(m)) {
+      out.quotaScope = "account";
+    } else if (/rate.?limit.*(exceed|hit)|too many requests/i.test(m)) {
+      out.quotaScope = "minute";
+    }
+  }
+  return out;
 }
 
 // "Retry-After" headers are seconds or an HTTP date; return ms or null.
@@ -112,7 +181,39 @@ export function parseRetryAfterMs(value) {
 }
 
 const RATE_LIMIT_BASE_DELAY_MS = 1000;
-const RATE_LIMIT_MAX_DELAY_MS = 15000;
+// A single wait never exceeds this, and the total time an LLM instance spends
+// waiting out rate limits is budgeted (rateLimitBudgetMs) — after the budget
+// is spent the error propagates and the job falls back to another provider.
+const RATE_LIMIT_MAX_DELAY_MS = 30000;
+// A rate limit with a window longer than this can't be waited out inside a
+// run (daily caps reset in hours): retrying would burn quota-delayed minutes,
+// so the error escalates immediately to the next provider / final message.
+const RATE_LIMIT_WAITABLE_CEILING_MS = 120000;
+// Consecutive instant 429s (no Retry-After header, no scope hint) on one
+// model before advancing to the next ranked candidate. Covers free/shared
+// routes that answer bare 429s without any server-provided timing.
+const RATE_LIMIT_STREAK_ESCALATE = 3;
+// Process-wide breaker state per `${providerId}|${model}` route. Lives at
+// module level ON PURPOSE: pipeline phases call llm.chat() separately (and
+// sometimes construct fresh LLM instances), so per-call counters reset and
+// doom-loops repeat. Entries expire so a recovered route is retried later.
+const ROUTE_FAIL_TTL_MS = 60000;
+const routeFailStreak = new Map(); // key -> { count, updatedAt }
+function routeFailRecord(providerId, modelId) {
+  const key = `${providerId}|${modelId}`;
+  const rec = routeFailStreak.get(key);
+  const fresh = rec && Date.now() - rec.updatedAt < ROUTE_FAIL_TTL_MS;
+  return { key, rec: fresh ? rec : null };
+}
+// A model whose breaker is open must be skipped by auto-selection entirely.
+export function routeIsBroken(providerId, modelId) {
+  const { rec } = routeFailRecord(providerId, modelId);
+  return Boolean(rec && rec.count >= RATE_LIMIT_STREAK_ESCALATE);
+}
+// After a catalog fetch fails (bad key, network), don't re-hit the provider
+// for every stage/send within this window — fall straight to FALLBACK ids.
+const CATALOG_FAILURE_TTL_MS = 120000;
+const catalogFailures = new Map(); // key -> epoch ms of last failed fetch
 
 export function canceledError() {
   const err = new Error("canceled");
@@ -137,7 +238,7 @@ function abortableSleep(ms, signal) {
   });
 }
 
-// Exponential backoff for 429s: 2s, 4s, 8s, 16s, 32s, capped at 60s.
+// Exponential backoff for 429s: 1s, 2s, 4s … capped at RATE_LIMIT_MAX_DELAY_MS.
 // A server-provided Retry-After always wins (capped so a bad header can't stall a run).
 export function rateLimitBackoffMs(attempt, retryAfterMs = null, scale = 1) {
   const exponential = Math.min(RATE_LIMIT_BASE_DELAY_MS * 2 ** Math.max(0, attempt - 1), RATE_LIMIT_MAX_DELAY_MS);
@@ -145,9 +246,12 @@ export function rateLimitBackoffMs(attempt, retryAfterMs = null, scale = 1) {
 }
 
 export class LLMConfigError extends Error {
-  constructor(message) {
+  constructor(message, opts = {}) {
     super(message);
     this.name = "LLMConfigError";
+    // Provider-hoppable failure (e.g. the key authenticates badly) — lets
+    // main.js fall through to the next configured provider automatically.
+    this.fallbackable = Boolean(opts.fallbackable);
   }
 }
 
@@ -158,43 +262,74 @@ export class LLMModelError extends Error {
   }
 }
 
+// A whole-run safety clock: when the deadline passes, every remaining stage
+// aborts instead of queueing more slow calls. Never retried automatically.
+export class LLMDeadlineError extends Error {
+  constructor(message = "This run hit its time limit — providers are slow or out of quota right now. Send again shortly.") {
+    super(message);
+    this.name = "LLMDeadlineError";
+  }
+}
+
 // Price annotations are per 1M input/output tokens, USD. The APIs don't
 // expose pricing, so this table is maintained by hand; unknown models fall
 // back to a generic paid note.
+//
+// Ranks order each provider's dropdown free-tier-first, then best value for
+// CAD (reliable tool calling per token) → premium extremes → budget legacy,
+// with unclassified models last. Lower rank = higher in the list.
 const MODEL_INFO = {
   gemini: [
-    { match: /3\.1.*flash-lite/i, tier: "free tier", price: "$0.25 / $1.50 per 1M tok", rank: 0 },
-    { match: /3\.5.*flash-lite/i, tier: "free tier", price: "$0.30 / $2.50 per 1M tok", rank: 1 },
-    { match: /3\.[67].*flash/i, tier: "free tier", price: "$0.75 / $3.75 per 1M tok through 2026", rank: 2 },
-    { match: /3\.5.*flash/i, tier: "free tier", price: "$1.50 / $9.00 per 1M tok", rank: 3 },
-    { match: /pro/i, tier: "paid", price: "premium, see Gemini pricing", rank: 4 },
+    // Free tier first, strongest Flash variants before weaker ones.
+    { match: /3\.7.*flash(?!-lite)/i, tier: "free tier", price: "$0.75 / $3.75 per 1M tok through 2026", rank: 0 },
+    { match: /3\.6.*flash(?!-lite)/i, tier: "free tier", price: "$0.75 / $3.75 per 1M tok through 2026", rank: 1 },
+    { match: /2\.5.*flash(?!-lite)/i, tier: "free tier", price: "$0.30 / $2.50 per 1M tok", rank: 2 },
+    { match: /3\.5.*flash(?!-lite)/i, tier: "free tier", price: "$1.50 / $9.00 per 1M tok", rank: 3 },
+    // Paid Pro tiers next.
+    { match: /pro/i, tier: "paid", price: "premium, see Gemini pricing", rank: 10 },
+    // Flash Lite last among free: cheapest but weakest for CAD tool loops.
+    { match: /3\.5.*flash-lite/i, tier: "free tier", price: "$0.30 / $2.50 per 1M tok", rank: 20 },
+    { match: /3\.1.*flash-lite/i, tier: "free tier", price: "$0.25 / $1.50 per 1M tok", rank: 21 },
+    { match: /flash-lite/i, tier: "free tier", price: "$0.25 / $1.50 per 1M tok", rank: 22 },
+    // Catch-all for other free-tier Flash releases.
+    { match: /flash/i, tier: "free tier", price: "free-tier friendly", rank: 4 },
   ],
   zai: [
-    { match: /flash|air/i, tier: "fast tier", price: "lowest GLM cost tier", rank: 0 },
-    { match: /glm-[45]\.[67]/i, tier: "balanced", price: "mid GLM cost tier", rank: 1 },
-    { match: /glm-5/i, tier: "flagship", price: "highest GLM quality tier", rank: 2 },
+    { match: /flash/i, tier: "fast tier", price: "near-free GLM route", rank: 0 },
+    { match: /air/i, tier: "fast tier", price: "near-free GLM route", rank: 1 },
+    { match: /glm-4\.7$/i, tier: "balanced", price: "best-value agentic GLM", rank: 2 },
+    { match: /glm-4\.6$/i, tier: "balanced", price: "mid GLM cost tier", rank: 3 },
+    { match: /glm-5\.1|glm-5$/i, tier: "flagship", price: "highest GLM quality tier", rank: 4 },
   ],
   qwen: [
-    { match: /turbo/i, tier: "fast tier", price: "lowest Qwen cost tier", rank: 0 },
-    { match: /plus/i, tier: "balanced", price: "mid Qwen cost tier", rank: 1 },
-    { match: /max/i, tier: "flagship", price: "highest Qwen quality tier", rank: 2 },
+    { match: /qwen3-turbo/i, tier: "fast tier", price: "lowest Qwen cost tier", rank: 0 },
+    { match: /turbo/i, tier: "fast tier", price: "lowest Qwen cost tier", rank: 1 },
+    { match: /qwen3-plus/i, tier: "balanced", price: "best-value Qwen workhorse", rank: 2 },
+    { match: /plus/i, tier: "balanced", price: "mid Qwen cost tier", rank: 3 },
+    { match: /qwen3-max/i, tier: "flagship", price: "highest Qwen quality tier", rank: 4 },
+    { match: /max/i, tier: "flagship", price: "highest Qwen quality tier", rank: 5 },
   ],
   openai: [
-    { match: /gpt-5-nano/i, tier: "efficient", price: "lowest OpenAI cost tier", rank: 0 },
-    { match: /gpt-5-mini/i, tier: "balanced", price: "lower cost than flagship GPT-5", rank: 1 },
+    { match: /^gpt-5-nano$/i, tier: "efficient", price: "lowest OpenAI cost tier", rank: 0 },
+    { match: /^gpt-5-mini$/i, tier: "balanced", price: "lower cost than flagship GPT-5", rank: 1 },
     { match: /^gpt-5$/i, tier: "premium", price: "flagship OpenAI tier", rank: 2 },
-    { match: /gpt-5-pro/i, tier: "ultra", price: "highest OpenAI quality tier", rank: 3 },
-    { match: /gpt-4\.1-mini|gpt-4o-mini/i, tier: "efficient", price: "low OpenAI cost tier", rank: 4 },
+    { match: /^gpt-4\.1$/i, tier: "balanced+", price: "strong tool-calling value", rank: 3 },
+    { match: /gpt-5-pro/i, tier: "ultra", price: "highest OpenAI quality tier", rank: 4 },
+    // Legacy mini/o-series models last: superseded for tool calling.
+    { match: /mini/i, tier: "efficient", price: "low OpenAI cost tier", rank: 5 },
+    { match: /gpt-4o/i, tier: "legacy", price: "older generation", rank: 6 },
   ],
   claude: [
-    { match: /haiku/i, tier: "efficient", price: "lowest Claude cost tier", rank: 0 },
-    { match: /sonnet/i, tier: "balanced", price: "mid Claude cost tier", rank: 1 },
+    { match: /claude-haiku-4-5|claude-[45]-haiku/i, tier: "efficient", price: "lowest Claude cost tier", rank: 0 },
+    { match: /sonnet/i, tier: "balanced", price: "mid Claude cost tier — proven CAD sweet spot", rank: 1 },
     { match: /opus/i, tier: "ultra", price: "highest Claude quality tier", rank: 2 },
+    { match: /haiku/i, tier: "efficient", price: "previous-generation Haiku", rank: 3 },
   ],
   openrouter: [
-    { match: /haiku|mini|flash/i, tier: "efficient", price: "low cost tier", rank: 0 },
-    { match: /sonnet|gpt-4\.1|llama-3\.3-70b/i, tier: "balanced", price: "mid cost tier", rank: 1 },
-    { match: /opus|gpt-5|gemini-.*-pro/i, tier: "ultra", price: "premium tier", rank: 2 },
+    // Free routes surface first, then value workhorses, then premium.
+    { match: /:free$/i, tier: "free", price: "$0.00 on OpenRouter", rank: 0 },
+    { match: /opus|gpt-5(?!-(mini|nano))|gemini-.*-pro|qwen3?-max|deepseek-r1/i, tier: "ultra", price: "premium tier", rank: 2 },
+    { match: /sonnet|flash|mini|nano|haiku|air|small|chat|glm-[45]|kimi|plus|llama|turbo/i, tier: "value", price: "low-to-mid cost tier", rank: 1 },
   ],
 };
 
@@ -370,10 +505,15 @@ function modelInfo(providerId, modelId) {
   for (const row of table) {
     if (row.match.test(modelId)) return row;
   }
-  return { tier: "paid", price: "see provider pricing", rank: 9 };
+  return { tier: "paid", price: "see provider pricing", rank: 90 };
 }
 
 const modelCache = new Map();
+
+// Real per-token prompt prices captured from OpenRouter's catalog response.
+// Used as the tiebreak inside equal ranks so cheaper models surface first
+// and every free route lands above paid ones. Empty for other providers.
+const openrouterPricing = new Map();
 
 function annotate(providerId, ids) {
   return ids
@@ -388,7 +528,15 @@ function annotate(providerId, ids) {
         supportsVision: modelSupportsVision(providerId, id),
       };
     })
-    .sort((a, b) => a.rank - b.rank || a.id.localeCompare(b.id));
+    .sort((a, b) => {
+      if (a.rank !== b.rank) return a.rank - b.rank;
+      const pa = openrouterPricing.get(a.id);
+      const pb = openrouterPricing.get(b.id);
+      const fa = Number.isFinite(pa) ? pa : Infinity;
+      const fb = Number.isFinite(pb) ? pb : Infinity;
+      if (fa !== fb) return fa - fb;
+      return a.id.localeCompare(b.id);
+    });
 }
 
 export function listModelPackets(providerId, catalog = []) {
@@ -432,8 +580,16 @@ export async function listModels(providerId, apiKey) {
   };
 
   let ids = [];
+  // Auth/network failures are negatively cached: an invalid key would
+  // otherwise re-hit the provider on every pipeline stage and every send,
+  // adding latency and log noise without ever yielding a live catalog.
+  const failureKey = `catalog-fail:${providerId}:${apiKey.slice(0, 16)}`;
+  const failedAt = catalogFailures.get(failureKey);
+  const catalogFetchable = !(failedAt && Date.now() - failedAt < CATALOG_FAILURE_TTL_MS);
   try {
-    if (CURATED[providerId]) {
+    if (!catalogFetchable) {
+      throw new Error("catalog fetch recently failed");
+    } else if (CURATED[providerId]) {
       ids = CURATED[providerId];
     } else if (providerId === "gemini") {
       const res = await fetch("https://generativelanguage.googleapis.com/v1beta/models", {
@@ -474,7 +630,7 @@ export async function listModels(providerId, apiKey) {
       // Only publishers with proven tool-calling quality make the cut —
       // the dropdown should show models that will actually build CAD.
       const TRUSTED = /^(openai|anthropic|google|meta-llama|qwen|mistralai|deepseek|x-ai|moonshotai|z-ai|microsoft)\//i;
-      ids = (data.data || [])
+      const rows = (data.data || [])
         .filter((m) => {
           const out = m.architecture?.output_modalities;
           if (Array.isArray(out) && !out.includes("text")) return false;
@@ -484,19 +640,21 @@ export async function listModels(providerId, apiKey) {
           if (/(:batch|:offline)$/i.test(id)) return false;
           // Strip chat/embedding/rerank specials that would never build CAD.
           return !/embed|whisper|tts|guard|moderation|rerank|search|image-gen/i.test(id);
-        })
-        .sort((a, b) => {
-          // Bigger working context generally means a more capable model;
-          // cheaper price breaks ties so free tiers surface early.
-          const ca = Number(a.context_length || 0);
-          const cb = Number(b.context_length || 0);
-          if (cb !== ca) return cb - ca;
-          const pa = parseFloat(a.pricing?.prompt ?? "0");
-          const pb = parseFloat(b.pricing?.prompt ?? "0");
-          return (Number.isFinite(pa) ? pa : 9) - (Number.isFinite(pb) ? pb : 9);
-        })
-        .slice(0, 30)
-        .map((m) => m.id);
+        });
+      // Cheapest routes (including every free one) survive the cap; display
+      // order is decided later by rank + real price inside annotate().
+      rows.sort((a, b) => {
+        const pa = Number(a.pricing?.prompt ?? NaN);
+        const pb = Number(b.pricing?.prompt ?? NaN);
+        const fa = Number.isFinite(pa) ? pa : Infinity;
+        const fb = Number.isFinite(pb) ? pb : Infinity;
+        return fa - fb;
+      });
+      openrouterPricing.clear();
+      for (const m of rows.slice(0, 30)) {
+        openrouterPricing.set(String(m.id), Number(m.pricing?.prompt ?? NaN));
+      }
+      ids = rows.slice(0, 30).map((m) => String(m.id));
     } else {
       const res = await fetch(`${provider.baseUrl}/models`, {
         headers: { Authorization: `Bearer ${apiKey}` },
@@ -515,20 +673,34 @@ export async function listModels(providerId, apiKey) {
     }
   } catch {
     ids = [];
+    if (failedAt === undefined || Date.now() - failedAt >= CATALOG_FAILURE_TTL_MS) {
+      catalogFailures.set(failureKey, Date.now());
+    }
   }
 
   const FALLBACK = {
     zai: CURATED.zai,
     qwen: CURATED.qwen,
-    gemini: ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-3.7-flash", "gemini-2.5-flash", "gemini-2.5-pro"],
-    openai: ["gpt-4.1-mini", "gpt-4.1", "gpt-5-nano", "gpt-5-mini", "gpt-5"],
-    claude: ["claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-1", "claude-sonnet-4-0", "claude-3-5-haiku-latest"],
+    gemini: [
+      // Order reflects what providers actually confirm works. When this
+      // catalog is only used because the live fetch failed (e.g. an invalid
+      // key), prefer ids known to still serve new requests.
+      "gemini-3.6-flash",
+      "gemini-2.5-flash",
+      "gemini-2.5-pro",
+      "gemini-3.5-flash",
+      "gemini-3.1-pro-preview",
+      "gemini-3.5-flash-lite",
+      "gemini-3.1-flash-lite",
+    ],
+    openai: ["gpt-5-nano", "gpt-5-mini", "gpt-5", "gpt-4.1", "gpt-5-pro", "gpt-4.1-mini"],
+    claude: ["claude-haiku-4-5", "claude-sonnet-4-5", "claude-opus-4-1", "claude-3-5-haiku-latest"],
     openrouter: [
-      "google/gemini-2.5-flash",
-      "openai/gpt-4.1-mini",
       "anthropic/claude-haiku-4.5",
-      "meta-llama/llama-3.3-70b-instruct",
       "anthropic/claude-sonnet-4.5",
+      "google/gemini-2.5-flash",
+      "meta-llama/llama-3.3-70b-instruct",
+      "openai/gpt-4.1-mini",
       "google/gemini-2.5-pro",
     ],
   };
@@ -540,17 +712,29 @@ export async function listModels(providerId, apiKey) {
 }
 
 export class LLM {
-  constructor({ provider: providerId, apiKey, model, timeoutMs = 180000, retryDelayScale = 1, rateLimitMaxAttempts = 7 } = {}) {
+  constructor({ provider: providerId, apiKey, model, timeoutMs = 75000, retryDelayScale = 1, rateLimitMaxAttempts = 5, rateLimitBudgetMs = 60000 } = {}) {
     const provider = providerById(providerId);
     if (!provider) throw new LLMConfigError(`Unknown provider: ${providerId}`);
     this.providerId = providerId;
     this.provider = provider;
     this.apiKey = apiKey || process.env[provider.keyEnv];
     this.model = model;
+    // True when the caller pinned an exact model id; auto-selected models may
+    // silently hop candidates on retirement errors, pinned ones may not.
+    this.modelExplicit = Boolean(model);
+    this._usedModels = new Set();
+    if (model) this._usedModels.add(model);
+    this._candidatePool = null;
     this.timeoutMs = timeoutMs;
     // retryDelayScale shrinks sleeps so tests run in milliseconds.
     this.retryDelayScale = retryDelayScale;
     this.rateLimitMaxAttempts = Math.max(1, rateLimitMaxAttempts);
+    // Total seconds this client may spend sleeping out rate limits before
+    // giving up (scaled by retryDelayScale so tests stay instant).
+    this.rateLimitBudgetMs = Math.max(0, rateLimitBudgetMs);
+    // Optional whole-run safety clock (epoch ms). Once passed, chat() throws
+    // LLMDeadlineError instead of queueing another slow call.
+    this.deadlineAt = null;
     // Optional AbortSignal from the owning job; aborting cancels in-flight
     // requests and backoff sleeps instantly.
     this.signal = null;
@@ -566,13 +750,42 @@ export class LLM {
     return this;
   }
 
+  setDeadline(at) {
+    this.deadlineAt = at;
+    return this;
+  }
+
+  // Per-call telemetry sink. main.js installs globalThis.__cadaraLlmTelemetry
+  // to persist entries into userData/cadara-agent.log. Outside Electron,
+  // setting CADARA_AGENT_LOG=<path> captures the same JSONL stream; when
+  // neither is present this is a no-op (tests stay quiet).
+  _telemetry(entry) {
+    if (typeof globalThis.__cadaraLlmTelemetry === "function") {
+      try {
+        globalThis.__cadaraLlmTelemetry(entry);
+      } catch {}
+      return;
+    }
+    const logPath = process.env.CADARA_AGENT_LOG;
+    if (!logPath) return;
+    try {
+      fs.appendFileSync(logPath, JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n", "utf8");
+    } catch {}
+  }
+
   async chat({ messages, tools = null, temperature = 0.4, onRetry = null }) {
     const hasImage = messagesContainImage(messages);
     if (!this.model) {
       const fullCatalog = await listModels(this.providerId, this.apiKey);
       const catalog = hasImage ? fullCatalog.filter((m) => m.supportsVision) : fullCatalog;
       if (!catalog.length) throw new LLMConfigError("No models available for this provider.");
-      this.model = catalog[0].id;
+      // Skip routes whose process-wide breaker is open from earlier failures.
+      const usable = catalog.filter((m) => !routeIsBroken(this.providerId, m.id));
+      this.model = (usable[0] || catalog[0]).id;
+      // Remember the ranked rest as auto-switch candidates: if the provider
+      // retires/fails the first pick mid-run we advance down this list
+      // instead of dying (or pointlessly re-sending the same doomed call).
+      this._candidatePool = catalog.map((m) => m.id);
     }
     if (hasImage && !modelSupportsVision(this.providerId, this.model)) {
       throw new LLMConfigError(`${this.model} does not support image input. Pick a vision-capable model or remove the reference image.`);
@@ -589,25 +802,148 @@ export class LLM {
     if (this.providerId === "qwen") {
       body.enable_thinking = false;
     }
+    // Always send an explicit completion budget. When omitted, several
+    // OpenAI-compatible gateways assume the MODEL MAX (e.g. 65,535 for
+    // gemini-2.5-flash) and reject the whole call on credit preflight
+    // ("requested up to 65535 tokens…"), even though generated CAD sources
+    // need only a few thousand tokens.
+    if (!body.max_tokens) {
+      const configured = Number.parseInt(process.env.CADARA_MAX_TOKENS || "", 10);
+      body.max_tokens = Number.isFinite(configured) && configured > 0 ? Math.min(configured, 32000) : 8192;
+    }
 
     let attempt = 1;
     let timeouts = 0;
-    const maxAttempts = 4;
+    let modelSwitches = 0;
+    let rlStreak = 0; // consecutive rate-limit failures without any success
+    const maxAttempts = 3;
     let rateLimitAttempts = 0;
+    let rateLimitWaitTotal = 0;
+    const rateLimitBudget = this.rateLimitBudgetMs * this.retryDelayScale;
 
     while (attempt <= maxAttempts) {
+      // Whole-run safety clock: no new call may start past the deadline, and
+      // an in-flight call is cut short at the deadline instead of riding its
+      // full timeout.
+      if (this.deadlineAt && Date.now() >= this.deadlineAt) {
+        throw new LLMDeadlineError();
+      }
+      const callTimeout = this.deadlineAt
+        ? Math.min(this.timeoutMs, Math.max(5000, this.deadlineAt - Date.now()))
+        : this.timeoutMs;
       try {
-        const message = await this.requestChat(body);
+        const callStartedAt = Date.now();
+        const message = await this.requestChat(body, callTimeout);
+        rlStreak = 0;
+        routeFailStreak.delete(`${this.providerId}|${body.model}`);
+        this._telemetry({
+          event: "llm_call",
+          provider: this.providerId,
+          model: body.model,
+          durationMs: Date.now() - callStartedAt,
+          status: "ok",
+          usage: message.__usage || null,
+        });
         return message;
       } catch (err) {
+        this._telemetry({
+          event: "llm_call",
+          provider: this.providerId,
+          model: body.model,
+          status: err.name,
+          error: String(err?.message || "").slice(0, 300),
+          retryAfterMs: err.retryAfterMs ?? null,
+          quotaScope: err.quotaScope ?? null,
+        });
         if (err.name === "JobCanceledError") throw err;
+        if (err.name === "LLMDeadlineError") throw err;
+
+        // Retired/unavailable models must never burn retries against the
+        // same dead id. Advance to the next ranked candidate (or the exact
+        // replacement the provider suggested), bounded so a fully broken
+        // catalog fails fast with an actionable message.
+        if (err.name === "LLMModelError") {
+          this._usedModels.add(body.model);
+          modelSwitches++;
+          const suggestion =
+            err.suggestedModel && !this._usedModels.has(err.suggestedModel)
+              ? err.suggestedModel
+              : null;
+          let nextModel = null;
+          if (suggestion) {
+            // A server-provided replacement is trustworthy even when the
+            // caller pinned a model — it is that exact model's successor.
+            nextModel = suggestion;
+          } else if (!this.modelExplicit && this._candidatePool) {
+            nextModel = this._candidatePool.find((id) => !this._usedModels.has(id)) || null;
+          }
+          if (nextModel && modelSwitches <= 6) {
+            body.model = nextModel;
+            this.model = nextModel;
+            continue;
+          }
+          const tried = [...this._usedModels];
+          throw new LLMConfigError(
+            `${this.provider.label}: no usable model (tried ${tried.join(", ")}). Last error: ${err.message}` +
+              (this.modelExplicit ? " Pick a different model in AI Config." : ""),
+            { fallbackable: true }
+          );
+        }
+
         // Rate limits get their own track: more attempts and exponential
         // backoff (respecting Retry-After) so a free-tier quota window can
         // pass without the pipeline dying and restarting from zero.
         if (err instanceof LLMRateLimitError) {
+          rlStreak++;
+          // Process-wide breaker for routes that keep answering with instant,
+          // unexplained 429s (free/shared pools). Persists across chat() calls,
+          // stages, and fresh LLM instances — a per-call counter resets every
+          // phase and doom-loops instead. Once open, the error is marked
+          // unwaitable so client ladders AND step-level retries skip it.
+          const bare = !err.retryAfterMs && !err.quotaScope;
+          if (bare) {
+            const { key } = routeFailRecord(this.providerId, body.model);
+            const rec = routeFailStreak.get(key) || { count: 0, updatedAt: 0 };
+            rec.count += 1;
+            rec.updatedAt = Date.now();
+            routeFailStreak.set(key, rec);
+            if (rec.count >= RATE_LIMIT_STREAK_ESCALATE) {
+              err.unwaitable = true;
+              err.quotaReason = err.quotaReason || `${rec.count} consecutive rate-limited responses`;
+            }
+          }
+          // Escalate instead of waiting when the window can't pass inside
+          // this run, or when this model has become known-bad: advancing to
+          // another ranked candidate often works immediately; otherwise
+          // surface now rather than after minutes of doomed sleeps.
+          if (err.unwaitable) {
+            this._usedModels.add(body.model);
+            const nextCandidate =
+              !this.modelExplicit && modelSwitches < 6 && this._candidatePool
+                ? this._candidatePool.find((id) => !this._usedModels.has(id))
+                : null;
+            if (nextCandidate) {
+              body.model = nextCandidate;
+              this.model = nextCandidate;
+              modelSwitches++;
+              rlStreak = 0;
+              continue;
+            }
+            throw err;
+          }
           rateLimitAttempts++;
-          if (rateLimitAttempts >= this.rateLimitMaxAttempts) throw err;
-          const delayMs = rateLimitBackoffMs(rateLimitAttempts, err.retryAfterMs, this.retryDelayScale);
+          let delayMs = rateLimitBackoffMs(rateLimitAttempts, err.retryAfterMs, this.retryDelayScale);
+          // Real runs spread retries apart so parallel pipeline stages don't
+          // re-hammer the provider at the same instant. Tests (tiny scale)
+          // stay exact.
+          if (this.retryDelayScale >= 1) {
+            delayMs = Math.round(delayMs * (0.9 + Math.random() * 0.2));
+          }
+          // Attempt budget AND total-wait budget both apply: a provider that
+          // keeps limiting us hands the job to the next provider quickly
+          // instead of stalling the pipeline for many minutes.
+          if (rateLimitAttempts >= this.rateLimitMaxAttempts || rateLimitWaitTotal + delayMs > rateLimitBudget) throw err;
+          rateLimitWaitTotal += delayMs;
           if (onRetry) {
             onRetry({ attempt: rateLimitAttempts, maxAttempts: this.rateLimitMaxAttempts - 1, delayMs, retryAfterMs: err.retryAfterMs });
           }
@@ -617,8 +953,7 @@ export class LLM {
         const retryable =
           err.name === "LLMTransientError" ||
           err.name === "LLMServerError" ||
-          err.name === "LLMTimeoutError" ||
-          err.name === "LLMModelError";
+          err.name === "LLMTimeoutError";
         if (!retryable || attempt === maxAttempts) throw err;
         if (err.name === "LLMTimeoutError" && ++timeouts >= 3) throw err;
 
@@ -628,11 +963,11 @@ export class LLM {
     }
   }
 
-  async requestChat(body) {
-    if (this.providerId === "claude") return this.requestClaudeChat(body);
+  async requestChat(body, timeoutMs = null) {
+    if (this.providerId === "claude") return this.requestClaudeChat(body, timeoutMs);
 
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeoutMs ?? this.timeoutMs);
     const onJobCanceled = () => controller.abort();
     if (this.signal) {
       if (this.signal.aborted) {
@@ -678,7 +1013,11 @@ export class LLM {
     clearTimeout(timer);
     this.signal?.removeEventListener("abort", onJobCanceled);
 
-    const data = await res.json().catch(() => ({}));
+    const rawText = await res.text().catch(() => "");
+    let data = {};
+    try {
+      data = JSON.parse(rawText);
+    } catch {}
     const errType = data?.error?.type || "";
     const errMsg = data?.error?.message || "";
 
@@ -686,14 +1025,60 @@ export class LLM {
       if (/model.*(not support|not found|does not exist)|unsupported model/i.test(errMsg)) {
         throw new LLMModelError(body.model, this.provider.label);
       }
-      throw new LLMConfigError(`Invalid ${this.provider.label} API key. Update it in Settings.`);
+      // Google answers credentials that are not Generative Language API keys
+      // (e.g. AQ.-prefixed OAuth/Vertex tokens) with UNAUTHENTICATED plus
+      // "Expected OAuth 2 access token…" — explain the exact remedy instead
+      // of a generic key error.
+      const wrongCredentialKind = /OAuth 2|API_KEY_SERVICE_BLOCKED|UNAUTHENTICATED/i.test(errType + errMsg);
+      const hint =
+        this.providerId === "gemini" && wrongCredentialKind
+          ? ' Gemini keys must be AI Studio API keys starting with "AIza"; "AQ."-prefixed keys are OAuth/Vertex credentials and are rejected here. Create one at https://aistudio.google.com/apikey.'
+          : "";
+      throw new LLMConfigError(`Invalid ${this.provider.label} API key. Update it in Settings.${hint}`, { fallbackable: true });
     }
-    if (res.status === 404) throw new LLMModelError(body.model, this.provider.label);
-    if (res.status === 429) throw new LLMRateLimitError(undefined, parseRetryAfterMs(res.headers.get("retry-after")));
+    if (res.status === 404 || /no longer available|is not found|does not exist/i.test(String(errMsg))) {
+      const modelErr = new LLMModelError(body.model, this.provider.label);
+      // Providers often name the exact successor ("…use models/gemini-3.6-flash");
+      // carry it so chat() can hop straight to the recommended id.
+      const match = String(errMsg).match(/use models\/([A-Za-z0-9._\-:/]+)/i);
+      if (match) modelErr.suggestedModel = match[1];
+      if (/no longer available/i.test(String(errMsg))) modelErr.retired = true;
+      throw modelErr;
+    }
+    if (res.status === 429) {
+      // Parse structured quota scope from the body (Google RetryInfo /
+      // QuotaFailure violations, OpenRouter daily-cap phrasing, …) so waiting
+      // only happens for windows that can actually pass within a run.
+      const info = describeRateLimitBody(res.status, rawText);
+      const headerRetry = parseRetryAfterMs(res.headers.get("retry-after"));
+      const retryMs = headerRetry ?? info.retryAfterMs;
+      let scope = info.quotaScope;
+      if (!scope && retryMs != null && retryMs > RATE_LIMIT_WAITABLE_CEILING_MS) scope = "long";
+      throw new LLMRateLimitError(undefined, retryMs, {
+        quotaScope: scope,
+        quotaReason: info.quotaReason,
+        providerDetail: info.detail,
+      });
+    }
     if (res.status >= 500) {
       const serverErr = new Error(`${this.provider.label} server error (HTTP ${res.status}). Retrying...`);
       serverErr.name = "LLMServerError";
       throw serverErr;
+    }
+
+    // Credit preflight rejections (OpenRouter et al.) arrive as HTTP 400/402
+    // and must NOT be retried against the same route: no amount of waiting
+    // fixes an empty wallet. Surface them as account-scoped quota errors so
+    // provider fallback can hop to a healthier key immediately.
+    if (
+      (res.status === 400 || res.status === 402) &&
+      /requires more credits|can only afford|insufficient credits/i.test(String(errMsg))
+    ) {
+      const info = describeRateLimitBody(res.status, rawText);
+      throw new LLMRateLimitError(String(errMsg), null, {
+        quotaScope: info.quotaScope || "account",
+        providerDetail: info.detail,
+      });
     }
 
     if (!res.ok) {
@@ -714,12 +1099,13 @@ export class LLM {
     if (!message.reasoning_content && typeof message.reasoning === "string") {
       message.reasoning_content = message.reasoning;
     }
+    message.__usage = data.usage || null;
     return message;
   }
 
-  async requestClaudeChat(body) {
+  async requestClaudeChat(body, timeoutMs = null) {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+    const timer = setTimeout(() => controller.abort(), timeoutMs ?? this.timeoutMs);
     const onJobCanceled = () => controller.abort();
     if (this.signal) {
       if (this.signal.aborted) {

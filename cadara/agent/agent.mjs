@@ -8,7 +8,7 @@
  */
 
 import path from "node:path";
-import { LLM, LLMConfigError, LLMRateLimitError, canceledError, modelSupportsVision } from "./llm.mjs";
+import { LLM, LLMConfigError, LLMDeadlineError, LLMRateLimitError, canceledError, modelSupportsVision } from "./llm.mjs";
 import { TOOLS, generatePart } from "./tools.mjs";
 import { plannerPrompt, reviewerPrompt, routerPrompt, specPrompt, systemPrompt } from "./prompts.mjs";
 import { compactDesignContext } from "./session.mjs";
@@ -45,11 +45,15 @@ export async function withRateLimitRetry({ onEvent, agentId, agentName, step, ph
     } catch (err) {
       if (err.name === "JobCanceledError" || signal?.aborted) throw canceledError();
       if (!(err instanceof LLMRateLimitError)) throw err;
-      if (attempt >= RATE_LIMIT_STEP_RETRIES) {
-        throw new LLMRateLimitError(
-          `${agentName} is still rate-limited after ${RATE_LIMIT_STEP_RETRIES} retries. ` +
-            "Wait a minute and send the request again, or switch model/provider in AI Config."
-        );
+      // Daily/account quota exhaustion cannot recover by waiting here —
+      // surface it immediately so provider fallback can route around it.
+      if (err.unwaitable || attempt >= RATE_LIMIT_STEP_RETRIES) {
+        if (!err.unwaitable) {
+          err.message =
+            `${agentName} is still rate-limited after ${RATE_LIMIT_STEP_RETRIES} retries. ` +
+            "Wait a minute and send the request again, or switch model/provider in AI Config.";
+        }
+        throw err;
       }
       const delay = typeof retryDelayMs === "function"
         ? retryDelayMs(attempt)
@@ -399,7 +403,7 @@ async function synthesizeSpec({ llm, prompt, routing, sessionSnapshot, reference
   return spec;
 }
 
-async function planCad({ llm, prompt, routing, spec, sessionSnapshot, referenceAnalysis, aiConfig, onEvent }) {
+async function planCad({ llm, prompt, routing, sessionSnapshot, referenceAnalysis, aiConfig, onEvent }) {
   emitPipeline(onEvent, "planning", 4);
   emitAgent(onEvent, "planner", "Planner", "running", "Decomposing the CAD into buildable operations.", { step: 4, totalSteps: 6, phase: "planning" });
   onEvent("status", "Planner agent: decomposing the CAD ...");
@@ -412,13 +416,13 @@ async function planCad({ llm, prompt, routing, spec, sessionSnapshot, referenceA
       {
         role: "user",
         content:
-          `${context}${referenceContext(referenceAnalysis)}\n\nROUTING\n${JSON.stringify(routing)}${constraints}\n\nCAD BRIEF\n${JSON.stringify(spec)}\n\nRAW REQUEST\n${prompt}`,
+          `${context}${referenceContext(referenceAnalysis)}\n\nROUTING\n${JSON.stringify(routing)}${constraints}\n\nRAW REQUEST\n${prompt}`,
       },
     ],
     onRetry: onLlmRetry(onEvent, "planner", "Planner", 4, "planning"),
   }).catch(swallowNonRateLimit);
-  const plan = parseJsonObject(message?.content || "") || fallbackPlan({ spec });
-  plan.name = typeof plan.name === "string" && plan.name.trim() ? plan.name : spec.designName;
+  const plan = parseJsonObject(message?.content || "") || fallbackPlan({ spec: { designName: routing.name || "cad_part" } });
+  plan.name = typeof plan.name === "string" && plan.name.trim() ? plan.name : (routing.name || "cad_part");
   const steps = Array.isArray(plan.steps) ? plan.steps.length : 0;
   emitAgent(onEvent, "planner", "Planner", "done", `${steps} build steps planned.`, { step: 4, totalSteps: 6, phase: "planning" });
   return plan;
@@ -515,9 +519,21 @@ async function reviewResult({ llm, prompt, routing, spec, plan, referenceAnalysi
   return summary;
 }
 
-export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, sessionSnapshot = null, referenceImage = null, skills = [], aiConfig = { temperature: 0.1, maxIterations: 8, qualityMode: "balanced" }, onEvent = () => {}, signal = null }) {
+export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, sessionSnapshot = null, referenceImage = null, skills = [], aiConfig = { temperature: 0.1, maxIterations: 8, qualityMode: "balanced" }, onEvent = () => {}, signal = null, deadlineMs = 240000 }) {
   const llm = new LLM({ provider, apiKey, model });
   if (signal) llm.setCancelSignal(signal);
+  // Whole-run safety clock: slow or hung provider calls, rate-limit waits,
+  // and fallback hops all share one hard ceiling so a degraded provider can
+  // never stall the pipeline for many minutes.
+  const deadlineAt = Date.now() + Math.max(30000, deadlineMs);
+  llm.setDeadline(deadlineAt);
+  const ensureTime = () => {
+    if (Date.now() >= deadlineAt - 2000) {
+      throw new LLMDeadlineError(
+        `This run hit its ${Math.max(1, Math.round(deadlineMs / 60000))}-minute safety limit — the provider was slow or out of quota. Send again shortly.`
+      );
+    }
+  };
   if (referenceImage?.dataUrl && model && !modelSupportsVision(provider, model)) {
     throw new LLMConfigError(`${model} does not support image input. Pick a vision-capable model or remove the reference image.`);
   }
@@ -538,34 +554,42 @@ export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, se
     withRateLimitRetry({ onEvent, agentId, agentName, step, phase, run, signal });
 
   try {
-    routing = await retryStep("router", "Router", 1, "routing", () => routeRequest({ llm, prompt, sessionSnapshot, onEvent }));
+    const routingPromise = retryStep("router", "Router", 1, "routing", () => routeRequest({ llm, prompt, sessionSnapshot, onEvent }))
+      .catch(err => {
+        emitAgent(onEvent, "router", "Router", "error", err.message || "Router failed.", { step: 1, totalSteps: 6, phase: "routing" });
+        throw normalizeError(err);
+      });
+
+    const referencePromise = retryStep("reference", "Reference", 2, "reference", () => analyzeReferenceImage({ llm, prompt, referenceImage, onEvent }))
+      .catch(err => {
+        emitAgent(onEvent, "reference", "Reference", "error", err.message || "Reference analysis failed.", { step: 2, totalSteps: 6, phase: "reference" });
+        throw normalizeError(err);
+      });
+
+    [routing, referenceAnalysis] = await Promise.all([routingPromise, referencePromise]);
   } catch (err) {
-    emitAgent(onEvent, "router", "Router", "error", err.message || "Router failed.", { step: 1, totalSteps: 6, phase: "routing" });
-    throw normalizeError(err);
+    throw err;
   }
   // Locked in AFTER the router so the final routed mode — LLM verdict or
   // heuristic fallback — decides continuity, not a stale pre-routing guess.
   modifyMode = routing.mode === "modify" && Boolean(sessionSnapshot?.current?.pythonSource);
 
   try {
-    referenceAnalysis = await retryStep("reference", "Reference", 2, "reference", () => analyzeReferenceImage({ llm, prompt, referenceImage, onEvent }));
-  } catch (err) {
-    emitAgent(onEvent, "reference", "Reference", "error", err.message || "Reference analysis failed.", { step: 2, totalSteps: 6, phase: "reference" });
-    throw normalizeError(err);
-  }
+    const specPromise = retryStep("spec", "Intake / Spec", 3, "spec", () => synthesizeSpec({ llm, prompt, routing, sessionSnapshot, referenceAnalysis, aiConfig, onEvent }))
+      .catch(err => {
+        emitAgent(onEvent, "spec", "Intake / Spec", "error", err.message || "Spec failed.", { step: 3, totalSteps: 6, phase: "spec" });
+        throw normalizeError(err);
+      });
 
-  try {
-    spec = await retryStep("spec", "Intake / Spec", 3, "spec", () => synthesizeSpec({ llm, prompt, routing, sessionSnapshot, referenceAnalysis, aiConfig, onEvent }));
-  } catch (err) {
-    emitAgent(onEvent, "spec", "Intake / Spec", "error", err.message || "Spec failed.", { step: 3, totalSteps: 6, phase: "spec" });
-    throw normalizeError(err);
-  }
+    const planPromise = retryStep("planner", "Planner", 4, "planning", () => planCad({ llm, prompt, routing, sessionSnapshot, referenceAnalysis, aiConfig, onEvent }))
+      .catch(err => {
+        emitAgent(onEvent, "planner", "Planner", "error", err.message || "Planner failed.", { step: 4, totalSteps: 6, phase: "planning" });
+        throw normalizeError(err);
+      });
 
-  try {
-    plan = await retryStep("planner", "Planner", 4, "planning", () => planCad({ llm, prompt, routing, spec, sessionSnapshot, referenceAnalysis, aiConfig, onEvent }));
+    [spec, plan] = await Promise.all([specPromise, planPromise]);
   } catch (err) {
-    emitAgent(onEvent, "planner", "Planner", "error", err.message || "Planner failed.", { step: 4, totalSteps: 6, phase: "planning" });
-    throw normalizeError(err);
+    throw err;
   }
 
   const fallbackName = plan.name || spec.designName || routing.name || slugFromPrompt(prompt);
@@ -651,6 +675,7 @@ export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, se
 
   for (let i = 0; i < iterationsLimit; i++) {
     if (signal?.aborted) throw canceledError();
+    ensureTime();
     iterationsUsed = i + 1;
     const message = await callModel();
     if (typeof message.reasoning_content === "string") {

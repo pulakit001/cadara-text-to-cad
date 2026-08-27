@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld("cadara", {
     info: (relPath) => ipcRenderer.invoke("file:info", relPath),
     save: (args) => ipcRenderer.invoke("file:save", args),
     export: (args) => ipcRenderer.invoke("file:export", args),
+    reveal: (path) => ipcRenderer.invoke("file:reveal", { path }),
     onExportProgress: (cb) => {
       const listener = (_event, data) => cb(data);
       ipcRenderer.on("file:exportProgress", listener);

@@ -103,6 +103,41 @@
         <div id="chat" class="chat"></div>
 
         <form id="prompt-form" class="prompt-form">
+          <div id="tune-panel" class="tune-panel" hidden>
+            <div class="tune-head">
+              <span class="tune-title">Tune the next design</span>
+              <button id="tune-reset" class="text-btn" type="button">Reset</button>
+            </div>
+            <div class="tune-grid">
+              <label class="tune-row">
+                <span class="tune-label">Overall size</span>
+                <input id="tune-size" class="tune-slider" type="range" min="40" max="400" step="10" value="120" />
+                <span class="tune-value" data-value-for="tune-size">any</span>
+              </label>
+              <label class="tune-row">
+                <span class="tune-label">Wall thickness</span>
+                <input id="tune-wall" class="tune-slider" type="range" min="1" max="10" step="0.5" value="3" />
+                <span class="tune-value" data-value-for="tune-wall">any</span>
+              </label>
+              <label class="tune-row">
+                <span class="tune-label">Corner rounding</span>
+                <input id="tune-round" class="tune-slider" type="range" min="0" max="100" step="5" value="40" />
+                <span class="tune-value" data-value-for="tune-round">any</span>
+              </label>
+              <label class="tune-row">
+                <span class="tune-label">Detail level</span>
+                <input id="tune-detail" class="tune-slider" type="range" min="0" max="100" step="5" value="50" />
+                <span class="tune-value" data-value-for="tune-detail">any</span>
+              </label>
+              <label class="tune-row">
+                <span class="tune-label">Fit tolerance</span>
+                <input id="tune-fit" class="tune-slider" type="range" min="0" max="100" step="5" value="50" />
+                <span class="tune-value" data-value-for="tune-fit">any</span>
+              </label>
+            </div>
+            <div class="tune-note">Moved sliders constrain the next generation. Locked while a part is generating.</div>
+          </div>
+
           <div id="reference-uploader" class="reference-uploader">
             <input id="reference-input" type="file" accept="image/png,image/jpeg,image/webp" hidden />
             <div id="reference-preview" class="reference-preview" hidden>
@@ -124,6 +159,9 @@
           <div class="composer-row">
             <button id="reference-btn" class="composer-tool" type="button" title="Add reference image" aria-label="Add reference image">
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+            </button>
+            <button id="tune-btn" class="composer-tool" type="button" title="Tune design constraints" aria-label="Tune design constraints">
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h9M17 7h3M4 17h3M11 17h9"/><circle cx="15" cy="7" r="2.2"/><circle cx="9" cy="17" r="2.2"/></svg>
             </button>
 
             <div class="model-strip">
@@ -174,7 +212,38 @@
             </div>
             <button id="reset-view" class="tool-btn" type="button">Reset</button>
             <div class="artifact-actions">
+              <button id="details-btn" class="tool-btn" type="button">Details</button>
               <button id="export-btn" class="tool-btn" type="button">Export</button>
+            </div>
+          </div>
+          <div id="details-drawer" class="details-drawer" hidden>
+            <div class="details-head">
+              <h3>Part details</h3>
+              <button id="details-close" class="close-btn" type="button" aria-label="Close details">
+                <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6 6 18"/></svg>
+              </button>
+            </div>
+            <div class="details-body">
+              <section class="details-section" id="details-summary-sec">
+                <h4>Summary</h4>
+                <p id="details-summary"></p>
+              </section>
+              <section class="details-section" id="details-features-sec" hidden>
+                <h4>Features</h4>
+                <ul id="details-features"></ul>
+              </section>
+              <section class="details-section" id="details-assumptions-sec" hidden>
+                <h4>Assumptions</h4>
+                <ul id="details-assumptions"></ul>
+              </section>
+              <section class="details-section" id="details-geometry-sec" hidden>
+                <h4>Geometry</h4>
+                <dl id="details-geometry" class="details-facts"></dl>
+              </section>
+              <section class="details-section" id="details-meta-sec" hidden>
+                <h4>Build</h4>
+                <dl id="details-meta" class="details-facts"></dl>
+              </section>
             </div>
           </div>
           <div id="viewer-loading" class="viewer-loading" hidden>
@@ -190,7 +259,7 @@
               </button>
             </div>
             <div class="export-grid">
-              <button class="format-btn" type="button" data-fmt="step">STEP</button>
+              <button class="format-btn" type="button" data-fmt="step" title="Opens in Fusion 360, SolidWorks, FreeCAD">STEP</button>
               <button class="format-btn" type="button" data-fmt="stl">STL</button>
               <button class="format-btn" type="button" data-fmt="glb">GLB</button>
               <button class="format-btn" type="button" data-fmt="3mf">3MF</button>
@@ -200,11 +269,15 @@
               <button class="format-btn" type="button" data-fmt="dxf">DXF</button>
               <button class="format-btn" type="button" data-fmt="svg">SVG</button>
               <button class="format-btn" type="button" data-fmt="png">PNG</button>
-              <button class="format-btn" type="button" data-fmt="jpg">JPG</button>
             </div>
+            <div class="export-hint">STEP is the Fusion 360 / SolidWorks compatible format. PNG renders a snapshot.</div>
             <div id="export-progress" class="export-progress" hidden>
               <div class="progress-bar-bg"><div id="progress-bar-fill" class="progress-bar-fill"></div></div>
               <span id="progress-status" class="progress-status">Exporting...</span>
+            </div>
+            <div id="export-done" class="export-done" hidden>
+              <span id="export-path" class="export-path"></span>
+              <button id="export-reveal" class="text-btn" type="button">Reveal in Finder</button>
             </div>
           </div>
           <button id="texture-tab" class="texture-tab" type="button" hidden title="Texture">Texture</button>

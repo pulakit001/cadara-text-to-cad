@@ -352,5 +352,33 @@ export function createViewer(container) {
     }
   }
 
-  return { load, clear, reset, resize, applyTexture, clearTexture };
+  // Renders one frame at an elevated resolution and returns a PNG data URL
+  // of exactly what the user sees (camera, materials, textures included).
+  // The live canvas is restored afterwards; nothing visual changes.
+  async function captureHighRes({ width = 2560 } = {}) {
+    if (!current) throw new Error("Nothing is loaded in the viewer yet.");
+    const aspect = camera.aspect || 4 / 3;
+    const w = Math.max(1, Math.min(Math.round(width), 3200));
+    const h = Math.max(1, Math.round(w / aspect));
+    const oldSize = new THREE.Vector2();
+    renderer.getSize(oldSize);
+    const oldPixelRatio = renderer.getPixelRatio();
+    const oldAspect = camera.aspect;
+    try {
+      camera.aspect = w / h;
+      camera.updateProjectionMatrix();
+      renderer.setPixelRatio(1);
+      renderer.setSize(w, h, false);
+      renderer.render(scene, camera);
+      return renderer.domElement.toDataURL("image/png");
+    } finally {
+      renderer.setPixelRatio(oldPixelRatio);
+      renderer.setSize(oldSize.x, oldSize.y, false);
+      camera.aspect = oldAspect;
+      camera.updateProjectionMatrix();
+      renderer.render(scene, camera);
+    }
+  }
+
+  return { load, clear, reset, resize, applyTexture, clearTexture, captureHighRes };
 }

@@ -7,7 +7,8 @@
  * @module CadaraMain
  */
 
-const { app, BrowserWindow, ipcMain, dialog, safeStorage, protocol } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog, safeStorage, protocol, shell } = require("electron");
+const { spawn } = require("node:child_process");
 const path = require("node:path");
 const os = require("node:os");
 const fs = require("node:fs");
@@ -47,6 +48,12 @@ async function getCadSession() {
 }
 
 app.whenReady().then(async () => {
+  // ---------- persistent agent/LLM log ----------
+  // Every LLM call and provider attempt is appended as JSONL to
+  // userData/cadara-agent.log so "why was this slow / rate-limited" has an
+  // actual log to check. Rotation keeps a single 512 KB backstop file.
+  globalThis.__cadaraLlmTelemetry = appendLlmLog;
+
   protocol.handle("cadarafile", (request) => {
     const url = new URL(request.url);
     const filePath = decodeURIComponent(url.pathname);
@@ -206,6 +213,23 @@ function createWindow() {
               document.getElementById("settings-close").click();
               await sleep(300);
             }
+            // Optional E2E override so automation can pin a healthy
+            // provider/model instead of relying on last-used defaults.
+            const e2eProvider = ${JSON.stringify(process.env.CADARA_E2E_PROVIDER || "")};
+            if (e2eProvider) {
+              const ps = document.getElementById("provider-select");
+              if (ps) {
+                ps.value = e2eProvider;
+                ps.dispatchEvent(new Event("change", { bubbles: true }));
+                await sleep(700);
+              }
+              const e2eModel = ${JSON.stringify(process.env.CADARA_E2E_MODEL || "")};
+              const ms = document.getElementById("model-select");
+              if (ms && e2eModel) {
+                ms.value = e2eModel;
+                ms.dispatchEvent(new Event("change", { bubbles: true }));
+              }
+            }
             const ta = document.getElementById("prompt");
             ta.value = ${JSON.stringify(prompt)};
             document.getElementById("prompt-form").dispatchEvent(new Event("submit", { cancelable: true }));
@@ -267,6 +291,49 @@ function createWindow() {
             require("node:fs").writeFileSync(textureShot, textureImage.toPNG());
             console.log("[e2e] texture shot saved", textureShot);
           }
+
+          // Optional export pass: CADARA_E2E_EXPORTS="step,stl,png" runs the
+          // real export flow for each listed format through the renderer
+          // (including the high-res PNG capture) and verifies bytes landed.
+          // file:export routes destinations to CADARA_EXPORT_DEST_DIR in this
+          // mode, so no native dialog blocks the run.
+          if (process.env.CADARA_E2E_EXPORTS && result.artifactName) {
+            const formats = String(process.env.CADARA_E2E_EXPORTS).split(",").map((f) => f.trim()).filter(Boolean);
+            const destDir = process.env.CADARA_EXPORT_DEST_DIR || require("node:os").tmpdir();
+            const fsCheck = require("node:fs");
+            const results = {};
+            for (const fmt of formats) {
+              try {
+                const one = await mainWindow.webContents.executeJavaScript(`
+                  (async () => {
+                    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+                    const openPopup = document.getElementById("export-btn");
+                    const popup = document.getElementById("export-popup");
+                    if (!openPopup || !popup) return { error: "export popup missing" };
+                    popup.hidden = false;
+                    const btn = document.querySelector('.format-btn[data-fmt="${fmt}"]');
+                    if (!btn) return { error: "no button for ${fmt}" };
+                    btn.click();
+                    for (let i = 0; i < 120; i++) {
+                      await sleep(1000);
+                      const status = document.getElementById("progress-status")?.textContent || "";
+                      if (/Export complete/.test(status)) return { ok: true };
+                      if (/^Error:/.test(status)) return { ok: false, error: status.slice(0, 300) };
+                    }
+                    return { ok: false, error: "timed out waiting for ${fmt} export" };
+                  })()
+                `);
+                const savedPath = path.join(destDir, `part.${fmt}`);
+                let bytes = 0;
+                try { bytes = fsCheck.statSync(savedPath).size; } catch {}
+                results[fmt] = { ...one, bytes };
+              } catch (err) {
+                results[fmt] = { ok: false, error: err.message };
+              }
+            }
+            console.log("[e2e] exports:", JSON.stringify(results));
+          }
+
           app.quit();
         } catch (err) {
           console.log("[e2e] failed:", err.message);
@@ -610,8 +677,30 @@ ipcMain.handle("settings:get", () => {
 
 ipcMain.handle("settings:getKeys", () => maskedKeysForProviders());
 
-ipcMain.handle("settings:addKey", (_event, { provider, label, key }) => {
+ipcMain.handle("settings:addKey", async (_event, { provider, label, key }) => {
   if (!PROVIDER_IDS.includes(provider) || !key || !key.trim()) return { ok: false, error: "Invalid key." };
+  const trimmed = key.trim();
+
+  // Pre-flight validation with the same cheap catalog probe the test button
+  // uses. Dead credentials are rejected at add-time instead of failing every
+  // future pipeline run minutes deep — the exact failure mode that made runs
+  // look "rate-limited for everything" before.
+  const PROVIDER_LABELS = { gemini: "Gemini", zai: "Z.AI", qwen: "Qwen", openai: "OpenAI", claude: "Claude", openrouter: "OpenRouter" };
+  let probeStatus = "skipped";
+  try {
+    probeStatus = await probeProviderKey(provider, trimmed);
+  } catch {}
+  if (probeStatus === "invalid") {
+    const hint =
+      provider === "gemini" && !/^AIza/.test(trimmed)
+        ? ' Gemini keys must be AI Studio API keys starting with "AIza"; "AQ."-prefixed tokens are OAuth/Vertex credentials that Google rejects here.'
+        : "";
+    return {
+      ok: false,
+      error: `The provider rejected this ${PROVIDER_LABELS[provider] || provider} key (401/403).${hint}`,
+    };
+  }
+
   const settings = readSettings({ purgeBadKeys: true });
   if (!settings.apiKeys[provider]) settings.apiKeys[provider] = [];
   
@@ -621,7 +710,7 @@ ipcMain.handle("settings:addKey", (_event, { provider, label, key }) => {
   settings.apiKeys[provider].push({
     id: "key-" + Date.now(),
     label: label || "New Key",
-    key: key.trim(),
+    key: trimmed,
     active: isFirst
   });
   
@@ -732,6 +821,41 @@ ipcMain.handle("settings:setAiConfig", (_event, config) => {
   return { ok: true };
 });
 
+// Builds the final user-facing message after every configured provider
+// failed. Quotes each provider's ACTUAL reason verbatim instead of claiming
+// quotas "reset within a few minutes" even when the real cause was an
+// exhausted daily cap or an invalid key.
+function summarizeProviderFailures(trail) {
+  if (!trail.length) return "No providers available.";
+  const lines = trail.map((t) => `• ${t.label} (${t.kind}): ${t.message}`);
+  const anyDaily = trail.some((t) => /daily|out of credits/i.test(t.kind));
+  const opener =
+    trail.length > 1
+      ? "Every configured provider failed this run:"
+      : `Your only configured provider (${trail[0].label}) failed:`;
+  const hint = anyDaily
+    ? "\n\nDaily free-tier quotas reset when each provider's day rolls over (Gemini resets midnight Pacific). Until then use another provider/model in AI Config."
+    : "\n\nFix the issue above and send again, or add another provider key in Settings.";
+  return `${opener}\n${lines.join("\n")}${hint}`;
+}
+
+const CHAIN_TIME_BUDGET_MS = 300000; // hard ceiling across ALL provider hops
+
+// Persistent JSONL sink shared by llm.mjs telemetry events and this file's
+// provider-attempt records. Safe no-op when userData isn't resolvable yet.
+function appendLlmLog(entry) {
+  try {
+    const file = path.join(app.getPath("userData"), "cadara-agent.log");
+    try {
+      if (fs.existsSync(file) && fs.statSync(file).size > 512 * 1024) {
+        fs.renameSync(file, `${file}.1`);
+      }
+    } catch {}
+    const line = JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n";
+    fs.appendFileSync(file, line, "utf8");
+  } catch {}
+}
+
 ipcMain.handle("chat:send", async (_event, { prompt, provider: providerId, model, referenceImage, clientJobId } = {}) => {
   if (jobCanceled) jobCanceled = false;
   if (activeJob) return { ok: false, error: "A job is already running." };
@@ -781,30 +905,72 @@ ipcMain.handle("chat:send", async (_event, { prompt, provider: providerId, model
     mainWindow.webContents.send("chat:event", { type, payload, clientJobId: clientJobId || null });
   };
 
+  // One shared clock for the WHOLE send across provider hops. Per-provider
+  // deadlines previously reset on every hop, multiplying total runtime by
+  // the number of configured keys — a big part of "why does this take so long".
+  const chainDeadlineAt = Date.now() + CHAIN_TIME_BUDGET_MS;
+
+  // Provider fallback chain: the selected provider first, then every other
+  // provider with a configured key. A terminal rate limit (or a dead key)
+  // on one provider hops to the next instead of killing the run.
+  const fallbackChain = [provider, ...Object.values(PROVIDERS).filter((p) => p.id !== provider.id)]
+    .filter((p) => keyFor(p));
+
+  const attemptTrail = []; // { label, kind, message } per failed provider
   try {
-    const result = await runAgent({
-      prompt,
-      apiKey,
-      provider: provider.id,
-      model,
-      modelsRoot: getModelsRoot(),
-      sessionSnapshot: cadSession.snapshot(),
-      referenceImage: normalizedReferenceImage,
-      skills: activeSkills,
-      aiConfig,
-      signal: jobAbort.signal,
-      onEvent: (type, payload) => {
-        if (jobCanceled) throw new Error("canceled");
-        emit(type, payload);
-      },
-    });
-    if (jobCanceled) return { ok: false, canceled: true, error: "Canceled." };
-    cadSession.record({ prompt, result, summary: result.summary, routing: result.routing });
-    return { ok: true, result };
-  } catch (err) {
-    if (jobCanceled) return { ok: false, canceled: true, error: "Canceled." };
-    const message = err instanceof Error ? err.message : String(err);
-    return { ok: false, error: message };
+    let lastError = null;
+    for (let i = 0; i < fallbackChain.length; i++) {
+      const prov = fallbackChain[i];
+      if (i > 0) {
+        emit("status", `${lastError.label} could not finish this run — continuing with ${prov.label}.`);
+        console.log("[cadara] provider fallback ->", prov.label, "|", lastError.message);
+      }
+      try {
+        const result = await runAgent({
+          prompt,
+          apiKey: keyFor(prov),
+          provider: prov.id,
+          // The user's model choice only applies to the provider they picked;
+          // fallbacks auto-select from their own catalogs.
+          model: i === 0 ? model : "",
+          modelsRoot: getModelsRoot(),
+          sessionSnapshot: cadSession.snapshot(),
+          referenceImage: normalizedReferenceImage,
+          skills: activeSkills,
+          aiConfig,
+          signal: jobAbort.signal,
+          deadlineMs: Math.max(30000, chainDeadlineAt - Date.now()),
+          onEvent: (type, payload) => {
+            if (jobCanceled) throw new Error("canceled");
+            emit(type, payload);
+          },
+        });
+        if (jobCanceled) return { ok: false, canceled: true, error: "Canceled." };
+        cadSession.record({ prompt, result, summary: result.summary, routing: result.routing });
+        return { ok: true, result };
+      } catch (err) {
+        if (jobCanceled) return { ok: false, canceled: true, error: "Canceled." };
+        const message = err instanceof Error ? err.message : String(err);
+        // Hop only when another provider can plausibly do better: terminal
+        // rate limits and rejected keys/configs. Anything else returns that
+        // error directly so real bugs stay visible instead of masked.
+        const hopWorthy = Boolean(err?.rateLimited || err?.fallbackable);
+        attemptTrail.push({
+          label: prov.label,
+          kind: err?.quotaScope === "day" ? "daily quota exhausted" :
+                err?.quotaScope === "account" ? "account out of credits" :
+                err?.rateLimited ? "rate-limited" : "failed",
+          message,
+        });
+        appendLlmLog({ event: "provider_attempt", provider: prov.id, outcome: hopWorthy && i < fallbackChain.length - 1 ? "hopped" : "final", error: message.slice(0, 500) });
+        if (hopWorthy && i < fallbackChain.length - 1) {
+          lastError = { label: prov.label, rateLimited: Boolean(err?.rateLimited), message };
+          continue;
+        }
+        return { ok: false, error: message };
+      }
+    }
+    return { ok: false, error: summarizeProviderFailures(attemptTrail) };
   } finally {
     activeJob = null;
   }
@@ -923,8 +1089,17 @@ ipcMain.handle("session:restore", async (_event, { entry } = {}) => {
   return { ok: restored };
 });
 
-ipcMain.handle("file:export", async (event, { relPath, format, name } = {}) => {
+ipcMain.handle("file:export", async (event, { relPath, format, name, dataUrl } = {}) => {
   const filePath = path.join(getModelsRoot(), relPath || "");
+  
+  // Fail before showing a dialog when the source part is gone instead of
+  // surfacing an obscure conversion error after the user picked a location.
+  if (!fs.existsSync(filePath)) {
+    return {
+      ok: false,
+      error: "This part's files are not on disk anymore. Regenerate the design, then export.",
+    };
+  }
   const defaultPath = name ? path.join(app.getPath("downloads"), name) : undefined;
   
   // Set up filters based on format
@@ -934,37 +1109,119 @@ ipcMain.handle("file:export", async (event, { relPath, format, name } = {}) => {
                      format === "iges" ? ["iges", "igs"] :
                      format === "dxf" ? ["dxf"] :
                      format === "svg" ? ["svg"] :
+                     format === "png" ? ["png"] :
                      format === "step" ? ["step", "stp"] :
                      format === "stl" ? ["stl"] :
                      format === "glb" ? ["glb"] : ["*"];
                      
-  const { canceled, filePath: dest } = await dialog.showSaveDialog(mainWindow, {
-    defaultPath,
-    filters: [{ name: `${format.toUpperCase()} Files`, extensions }],
-  });
+  // Test hook: CADARA_EXPORT_DEST skips the native save dialog so automated
+  // runs can verify exports end-to-end. Never set in normal use.
+  // CADARA_E2E_EXPORTS likewise routes to a per-format destination under
+  // CADARA_EXPORT_DEST_DIR so the full UI flow stays dialog-free.
+  const { canceled, filePath: dest } = process.env.CADARA_EXPORT_DEST
+    ? { canceled: false, filePath: process.env.CADARA_EXPORT_DEST }
+    : process.env.CADARA_E2E_EXPORTS
+      ? { canceled: false, filePath: path.join(process.env.CADARA_EXPORT_DEST_DIR || os.tmpdir(), name || `part.${format}`) }
+      : await dialog.showSaveDialog(mainWindow, {
+          defaultPath,
+          filters: [{ name: `${format.toUpperCase()} Files`, extensions }],
+        });
   
   if (canceled || !dest) return { ok: false, canceled: true };
   
-  try {
-    // If it's a natively generated file, just copy it
-    if (["step", "stl", "glb"].includes(format)) {
-      await fsPromises.copyFile(filePath, dest);
-      return { ok: true, path: dest };
-    }
-    
-    // Send progress event
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send("file:exportProgress", { status: "converting", format });
-    }
-    
-    // Otherwise run the conversion script
+    try {
+      // STL/GLB already exist as build-time sidecars next to the STEP — copy
+      // the genuine article. Copying the STEP bytes under another extension
+      // (the old behavior) produces files no tool can open.
+      if (format === "stl" || format === "glb") {
+        const candidates =
+          format === "glb"
+            ? [path.join(path.dirname(filePath), "part.glb"), path.join(path.dirname(filePath), ".part.step.glb")]
+            : [path.join(path.dirname(filePath), `part.${format}`)];
+        const sidecar = candidates.find((c) => fs.existsSync(c));
+        if (sidecar) {
+          await fsPromises.copyFile(sidecar, dest);
+          return { ok: true, path: dest };
+        }
+        // No sidecar on disk: convert from the STEP rather than dead-ending.
+      }
+
+      // If it's a natively generated file, just copy it
+      if (format === "step") {
+        await fsPromises.copyFile(filePath, dest);
+        return { ok: true, path: dest };
+      }
+
+      // Send progress event
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("file:exportProgress", { status: "converting", format });
+      }
+
+      // PNG is a render, not a conversion. Preferred path: the renderer sends
+      // a high-resolution capture of the exact view the user sees (dataUrl).
+      // Fallback: the snapshot CLI renders the STEP offscreen at presentation
+      // resolution (2400x1600). Both land at the exact path the user chose.
+      if (format === "png") {
+        if (typeof dataUrl === "string" && dataUrl.startsWith("data:image/png;base64,")) {
+          try {
+            const buf = Buffer.from(dataUrl.slice("data:image/png;base64,".length), "base64");
+            if (!buf.length) throw new Error("empty capture");
+            await fsPromises.writeFile(dest, buf);
+            return { ok: true, path: dest };
+          } catch (err) {
+            return { ok: false, error: "PNG capture failed: " + String(err.message || err) };
+          }
+        }
+
+        const python = getCadPython();
+        const snapshotScript = path.join(getBundledCadRuntime(), "scripts", "snapshot");
+        const outDir = path.dirname(dest);
+        const base = path.basename(dest, path.extname(dest));
+        const renderTarget = path.join(outDir, base + ".png");
+        return new Promise((resolve) => {
+          const child = spawn(python, [
+            snapshotScript,
+            "--input", filePath,
+            "--output", renderTarget,
+            "--width", "2400",
+            "--height", "1600",
+          ], { cwd: outDir, env: { ...process.env } });
+
+          let stderr = "";
+          child.stderr.on("data", (data) => stderr += data.toString());
+          const killTimer = setTimeout(() => child.kill("SIGKILL"), 120000);
+          child.on("close", async (code) => {
+            clearTimeout(killTimer);
+            if (code !== 0) {
+              resolve({ ok: false, error: "PNG render failed: " + stderr.slice(-400) });
+              return;
+            }
+            try {
+              const candidates = (await fsPromises.readdir(outDir))
+                .filter((f) => f.startsWith(base + "_") && f.endsWith(".png"))
+                .map((f) => path.join(outDir, f));
+              if (!candidates.length) {
+                resolve({ ok: false, error: "PNG render produced no file." });
+                return;
+              }
+              const newest = candidates.sort().at(-1);
+              await fsPromises.rm(dest, { force: true });
+              await fsPromises.rename(newest, dest);
+              resolve({ ok: true, path: dest });
+            } catch (err) {
+              resolve({ ok: false, error: String(err.message || err) });
+            }
+          });
+        });
+      }
+
+      // Otherwise run the conversion script
     const python = getCadPython();
     const script = path.join(getBundledCadRuntime(), "scripts", "export_formats.py");
     const dir = path.dirname(filePath);
     const pylibs = path.join(getBundledCadRuntime(), "pylibs");
     const exportEnv = fs.existsSync(pylibs) ? { PYTHONPATH: pylibs } : {};
 
-    const { spawn } = require("node:child_process");
 
     return new Promise((resolve) => {
       const child = spawn(python, [script, filePath, "--format", format, "--output", dest], {
@@ -983,6 +1240,16 @@ ipcMain.handle("file:export", async (event, { relPath, format, name } = {}) => {
         }
       });
     });
+  } catch (err) {
+    return { ok: false, error: String(err.message || err) };
+  }
+});
+
+ipcMain.handle("file:reveal", (_event, { path: revealPath } = {}) => {
+  if (!revealPath || typeof revealPath !== "string") return { ok: false };
+  try {
+    shell.showItemInFolder(revealPath);
+    return { ok: true };
   } catch (err) {
     return { ok: false, error: String(err.message || err) };
   }

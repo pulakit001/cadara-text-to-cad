@@ -1175,17 +1175,7 @@ els.textureRemove.addEventListener("click", () => {
   setTextureStatus("Texture removed — back to the raw material.");
 });
 
-const RETRYABLE_PATTERNS = [
-  "too long", "busy", "server error", "rate limit", "ratelimit",
-  "timeout", "timed out", "ETIMEDOUT", "ECONNRESET", "ECONNREFUSED",
-  "503", "502", "500", "429", "try again", "overloaded", "capacity",
-  "transient", "network", "connection", "Retrying",
-];
 
-function isRetryableError(msg) {
-  const lower = msg.toLowerCase();
-  return RETRYABLE_PATTERNS.some((p) => lower.includes(p.toLowerCase()));
-}
 
 function formatBytes(bytes) {
   if (bytes < 1024 * 1024) return Math.max(1, Math.round(bytes / 1024)) + " KB";
@@ -1267,17 +1257,6 @@ async function send(prompt, isAutoRetry = false) {
     const res = await cadara.chat.send(prompt, currentProvider(), model, referenceForSend, clientJobId);
     if (clientJobId !== activeClientJobId) return;
     if (!res.ok) {
-      if (!res.canceled && isRetryableError(res.error) && autoRetryCount < maxRetries) {
-        autoRetryCount++;
-        const delay = Math.min(autoRetryCount * 3000, 15000);
-        addMessage("system", `⚠ ${res.error} — auto-retrying in ${Math.round(delay / 1000)}s (${autoRetryCount}/${maxRetries})...`);
-        setStatus(`Retrying (${autoRetryCount}/${maxRetries})…`);
-        retryTimer = setTimeout(() => {
-          retryTimer = null;
-          send(prompt, true);
-        }, delay);
-        return;
-      }
       addMessage("system", res.canceled ? "Canceled." : "⚠ " + res.error);
       if (res.canceled) {
         setStatus("Canceled");
@@ -1304,17 +1283,6 @@ async function send(prompt, isAutoRetry = false) {
   } catch (err) {
     if (clientJobId !== activeClientJobId) return;
     const errorMsg = err && err.message ? err.message : String(err);
-    if (isRetryableError(errorMsg) && autoRetryCount < maxRetries) {
-      autoRetryCount++;
-      const delay = Math.min(autoRetryCount * 3000, 15000);
-      addMessage("system", `⚠ ${errorMsg} — auto-retrying in ${Math.round(delay / 1000)}s (${autoRetryCount}/${maxRetries})...`);
-      setStatus(`Retrying (${autoRetryCount}/${maxRetries})…`);
-      retryTimer = setTimeout(() => {
-        retryTimer = null;
-        send(prompt, true);
-      }, delay);
-      return;
-    }
     addMessage("system", "⚠ " + errorMsg);
     setStatus("Failed");
     els.retryBtn.hidden = false;

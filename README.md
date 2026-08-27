@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="Cadara logo.png" alt="Cadara" width="360" />
+  <img src="cadara/renderer/assets/cadara-logo.png" alt="Cadara" width="360" />
   <p><strong>Design in words.</strong> Generate precision 3D CAD models using natural language and AI agents.</p>
 
   [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](https://opensource.org/licenses/MIT)
@@ -31,7 +31,7 @@ Most text-to-CAD tools are cloud APIs — you send prompts to someone else's geo
 
 It's built for makers, engineers, students, and product teams who want idea → inspectable CAD without giving up control. The project is experimental: always verify dimensions, tolerances, and manufacturability before production use.
 
-![Cadara application screenshot](./CADARA%20SCC.png)
+![Cadara application screenshot](./docs/screenshot.png)
 
 ## 📥 Download & Install
 

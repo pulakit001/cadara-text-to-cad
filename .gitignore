@@ -31,6 +31,10 @@ __pycache__/
 
 # ── Dev review artifacts ──
 .impeccable/
+.opencode/
+
+# ── Unrelated projects ──
+minecraftty/
 
 # ── Electron build output ──
 dist/
