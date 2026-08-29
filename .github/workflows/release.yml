@@ -63,6 +63,11 @@ jobs:
           # cpython-3.12 asset is resolved at run time from the release API,
           # so asset-name changes can't break the build.
           PBS_TAG: "20260814"
+          # Use the authenticated API: unauthenticated calls share the
+          # runner IP's 60 req/hr limit and flake out under load, which has
+          # failed the runtime lookup mid-build. GITHUB_TOKEN lifts that to
+          # ~5000 req/hr and eliminates the flake.
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           case "${{ matrix.artifact }}" in
             mac-arm64) TRIPLE="aarch64-apple-darwin" ;;
@@ -71,7 +76,7 @@ jobs:
           esac
           ASSET_URL=""
           for attempt in 1 2 3 4 5; do
-            ASSET_URL=$(curl -sfL --retry 5 --retry-delay 5 --retry-all-errors "https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/${PBS_TAG}" 2>/dev/null \
+            ASSET_URL=$(curl -sfL -H "Authorization: Bearer ${GITHUB_TOKEN}" --retry 5 --retry-delay 5 --retry-all-errors "https://api.github.com/repos/astral-sh/python-build-standalone/releases/tags/${PBS_TAG}" 2>/dev/null \
               | jq -r --arg tag "$PBS_TAG" --arg triple "$TRIPLE" \
                   '[.assets[] | select(.name | startswith("cpython-3.12") and endswith("+" + $tag + "-" + $triple + "-install_only.tar.gz"))][0].browser_download_url // empty' || true)
             if [ -n "$ASSET_URL" ]; then break; fi
