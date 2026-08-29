@@ -935,6 +935,12 @@ function summarizeProviderFailures(trail) {
 }
 
 const CHAIN_TIME_BUDGET_MS = 300000; // hard ceiling across ALL provider hops
+// Local (Ollama) models are effectively unlimited: they have no quotas and can
+// legitimately run long (first-time model load, heavy CAD generations), so the
+// provider-oriented safety clock does not apply. Individual LLM calls are still
+// bounded by the LLM's own per-call timeout so a truly hung model can't stall
+// forever.
+const LOCAL_CHAIN_TIME_BUDGET_MS = Number.MAX_SAFE_INTEGER / 2;
 
 // Persistent JSONL sink shared by llm.mjs telemetry events and this file's
 // provider-attempt records. Safe no-op when userData isn't resolvable yet.
@@ -1019,7 +1025,8 @@ ipcMain.handle("chat:send", async (_event, { prompt, provider: providerId, model
   // One shared clock for the WHOLE send across provider hops. Per-provider
   // deadlines previously reset on every hop, multiplying total runtime by
   // the number of configured keys — a big part of "why does this take so long".
-  const chainDeadlineAt = Date.now() + CHAIN_TIME_BUDGET_MS;
+  const chainDeadlineAt = Date.now()
+    + (provider.id === "ollama" ? LOCAL_CHAIN_TIME_BUDGET_MS : CHAIN_TIME_BUDGET_MS);
 
   // Provider fallback chain: the selected provider first, then every other
   // provider with a configured key. A terminal rate limit (or a dead key)

@@ -529,8 +529,11 @@ export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, se
   llm.setDeadline(deadlineAt);
   const ensureTime = () => {
     if (Date.now() >= deadlineAt - 2000) {
+      const isLocal = provider === "ollama";
       throw new LLMDeadlineError(
-        `This run hit its ${Math.max(1, Math.round(deadlineMs / 60000))}-minute safety limit — the provider was slow or out of quota. Send again shortly.`
+        isLocal
+          ? "This local run exceeded the maximum safety budget. The model may be hung or the geometry too heavy — simplify the request or add more RAM to Ollama."
+          : `This run hit its ${Math.max(1, Math.round(deadlineMs / 60000))}-minute safety limit — the provider was slow or out of quota. Send again shortly.`
       );
     }
   };
