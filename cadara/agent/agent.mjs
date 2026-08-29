@@ -199,10 +199,10 @@ function toolResultPayload(result) {
   };
   let log = result.log
     ? {
-        exitCode: result.log.exitCode,
-        stdout: result.log.stdout.slice(-2500),
-        stderr: result.log.stderr.slice(-3000),
-      }
+      exitCode: result.log.exitCode,
+      stdout: result.log.stdout.slice(-2500),
+      stderr: result.log.stderr.slice(-3000),
+    }
     : null;
   let body = JSON.stringify({ ...payload, log });
   if (body.length <= LIMIT) return body;
@@ -371,7 +371,7 @@ async function analyzeReferenceImage({ llm, prompt, referenceImage, onEvent }) {
       },
     ],
     onRetry: onLlmRetry(onEvent, "reference", "Reference", 2, "reference"),
-  });  const analysis = (message?.content || "").trim();
+  }); const analysis = (message?.content || "").trim();
   emitAgent(onEvent, "reference", "Reference", "done", analysis ? "Reference image understood." : "No useful image details returned.", { step: 2, totalSteps: 6, phase: "reference" });
   return analysis;
 }
@@ -519,7 +519,7 @@ async function reviewResult({ llm, prompt, routing, spec, plan, referenceAnalysi
   return summary;
 }
 
-export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, sessionSnapshot = null, referenceImage = null, skills = [], aiConfig = { temperature: 0.1, maxIterations: 8, qualityMode: "balanced" }, onEvent = () => {}, signal = null, deadlineMs = 240000 }) {
+export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, sessionSnapshot = null, referenceImage = null, skills = [], aiConfig = { temperature: 0.1, maxIterations: 8, qualityMode: "balanced" }, onEvent = () => { }, signal = null, deadlineMs = 240000 }) {
   const llm = new LLM({ provider, apiKey, model });
   if (signal) llm.setCancelSignal(signal);
   // Whole-run safety clock: slow or hung provider calls, rate-limit waits,
@@ -757,8 +757,8 @@ export async function runAgent({ prompt, apiKey, provider, model, modelsRoot, se
   if (lastResult?.ok) return finish(lastResult, "");
   throw new Error(
     (lastResult?.error || "The model could not produce a valid part.") +
-      "\n\nAfter " + iterationsLimit + " attempts, the build is still failing. " +
-        "Try simplifying the request, breaking it down into smaller steps, or using a more powerful model via the AI Config settings."
+    "\n\nAfter " + iterationsLimit + " attempts, the build is still failing. " +
+    "Try simplifying the request, breaking it down into smaller steps, or using a more powerful model via the AI Config settings."
   );
 
   function finish(result, summaryText) {

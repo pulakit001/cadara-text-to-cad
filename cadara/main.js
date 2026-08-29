@@ -134,6 +134,7 @@ function createWindow() {
     title: "Cadara",
     backgroundColor: "#0b0e14",
     titleBarStyle: isMac ? "hiddenInset" : "default",
+    icon: path.join(__dirname, "renderer", "assets", "cadara-icon.png"),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
@@ -325,7 +326,7 @@ function createWindow() {
                 `);
                 const savedPath = path.join(destDir, `part.${fmt}`);
                 let bytes = 0;
-                try { bytes = fsCheck.statSync(savedPath).size; } catch {}
+                try { bytes = fsCheck.statSync(savedPath).size; } catch { }
                 results[fmt] = { ...one, bytes };
               } catch (err) {
                 results[fmt] = { ok: false, error: err.message };
@@ -355,11 +356,99 @@ function settingsFile() {
 }
 
 const KEY_FIELDS = ["geminiApiKey", "zaiApiKey", "qwenApiKey", "openaiApiKey", "claudeApiKey", "openrouterApiKey"];
-const PROVIDER_IDS = ["gemini", "zai", "qwen", "openai", "claude", "openrouter"];
+const PROVIDER_IDS = ["gemini", "zai", "qwen", "openai", "claude", "openrouter", "ollama"];
 const MAX_REFERENCE_IMAGE_BYTES = 10 * 1024 * 1024;
 const IMAGE_DATA_URL_RE = /^data:(image\/(?:png|jpeg|webp));base64,([A-Za-z0-9+/=]+)$/;
 const MAX_ACTIVE_SKILLS = 2;
 const MAX_SKILL_BODY_LENGTH = 2000;
+
+// ---------- Ollama (local models) ----------
+// Ollama runs as a separate local server (default http://localhost:11434).
+// The app never requires it, but when it's running the user gets fully
+// local, free, offline CAD generation alongside the paid cloud providers.
+
+function ollamaBaseUrl() {
+  return process.env.OLLAMA_BASE_URL || "http://localhost:11434";
+}
+
+// Short-TTL reachability cache so meta(), probe, and send() don't each hit
+// the local server on every call.
+let ollamaUpCache = { up: false, at: 0 };
+async function ollamaReachable(force = false) {
+  if (!force && Date.now() - ollamaUpCache.at < 5000) return ollamaUpCache.up;
+  let up = false;
+  try {
+    const res = await fetch(ollamaBaseUrl() + "/api/tags", {
+      signal: AbortSignal.timeout(2500),
+    });
+    up = res.ok;
+  } catch { }
+  ollamaUpCache = { up, at: Date.now() };
+  return up;
+}
+
+// Local models default to a small context window, which would silently
+// truncate Cadara's long prompts. The OpenAI-compatible endpoint has no
+// per-request context setting, so the first use of each model derives a
+// "cadara-..." variant with num_ctx raised, via Ollama's native create API.
+const OLLAMA_CTX = 16384;
+const ollamaCtxModels = new Map(); // base model -> derived model name ("" = failed)
+
+function ollamaDerivedName(base) {
+  const safe = String(base).toLowerCase().replace(/[^a-z0-9.:-]/g, "-").replace(/:/g, "-");
+  return `cadara-${safe}-${Math.round(OLLAMA_CTX / 1024)}k`;
+}
+
+async function ensureOllamaCtxModel(base) {
+  if (!base) return base;
+  if (ollamaCtxModels.has(base)) {
+    const cached = ollamaCtxModels.get(base);
+    if (!cached) return base; // previously failed — fall back to the raw model
+    return cached;
+  }
+  const derived = ollamaDerivedName(base);
+  try {
+    // Does the derived variant already exist?
+    const list = await fetch(ollamaBaseUrl() + "/api/tags", { signal: AbortSignal.timeout(4000) });
+    if (list.ok) {
+      const data = await list.json();
+      const installed = (data.models || []).some((m) => m.name === derived || m.name === derived + ":latest");
+      if (installed) {
+        ollamaCtxModels.set(base, derived);
+        return derived;
+      }
+    }
+    // Create it: new-style payload first (from + parameters), then the
+    // classic Modelfile payload for older Ollama servers.
+    let created = false;
+    try {
+      const res = await fetch(ollamaBaseUrl() + "/api/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: derived, from: base, parameters: { num_ctx: OLLAMA_CTX } }),
+        signal: AbortSignal.timeout(60000),
+      });
+      created = res.ok;
+    } catch { }
+    if (!created) {
+      const res = await fetch(ollamaBaseUrl() + "/api/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: derived,
+          modelfile: `FROM ${base}\nPARAMETER num_ctx ${OLLAMA_CTX}\n`,
+        }),
+        signal: AbortSignal.timeout(60000),
+      });
+      created = res.ok;
+    }
+    ollamaCtxModels.set(base, created ? derived : "");
+    return created ? derived : base;
+  } catch {
+    ollamaCtxModels.set(base, "");
+    return base;
+  }
+}
 
 function skillsFile() {
   return path.join(app.getPath("userData"), "skills.json");
@@ -429,7 +518,7 @@ function readSettings({ purgeBadKeys = false } = {}) {
         claudeApiKey: "claude",
         openrouterApiKey: "openrouter",
       };
-      
+
       for (const [oldField, providerId] of Object.entries(oldKeyMap)) {
         if (parsed[oldField]) {
           let dec;
@@ -528,6 +617,10 @@ async function probeProviderKey(providerId, key) {
   let status = "other";
   try {
     let res;
+    if (providerId === "ollama") {
+      // No key exists to validate — the server being reachable IS the check.
+      return (await ollamaReachable(true)) ? "ok" : "unreachable";
+    }
     if (providerId === "gemini") {
       res = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=1", {
         headers: { "x-goog-api-key": key },
@@ -598,7 +691,7 @@ function clearStoredKey(field) {
 function writeSettings(settings) {
   // Deep clone to avoid mutating the in-memory object
   const toSave = JSON.parse(JSON.stringify(settings));
-  
+
   if (safeStorage.isEncryptionAvailable()) {
     if (toSave.apiKeys) {
       for (const p of PROVIDER_IDS) {
@@ -621,6 +714,8 @@ function writeSettings(settings) {
 }
 
 function keyFor(provider) {
+  // Ollama needs no API key — availability is the server being reachable.
+  if (provider.id === "ollama") return "ollama";
   const settings = readSettings({ purgeBadKeys: true });
   if (settings.apiKeys && settings.apiKeys[provider.id]) {
     const activeKey = settings.apiKeys[provider.id].find(k => k.active);
@@ -689,7 +784,7 @@ ipcMain.handle("settings:addKey", async (_event, { provider, label, key }) => {
   let probeStatus = "skipped";
   try {
     probeStatus = await probeProviderKey(provider, trimmed);
-  } catch {}
+  } catch { }
   if (probeStatus === "invalid") {
     const hint =
       provider === "gemini" && !/^AIza/.test(trimmed)
@@ -703,17 +798,17 @@ ipcMain.handle("settings:addKey", async (_event, { provider, label, key }) => {
 
   const settings = readSettings({ purgeBadKeys: true });
   if (!settings.apiKeys[provider]) settings.apiKeys[provider] = [];
-  
+
   const isFirst = settings.apiKeys[provider].length === 0;
   // If first key, make it active. Otherwise, deactivate others if we make this one active? No, just false by default unless first
-  
+
   settings.apiKeys[provider].push({
     id: "key-" + Date.now(),
     label: label || "New Key",
     key: trimmed,
     active: isFirst
   });
-  
+
   writeSettings(settings);
   return { ok: true };
 });
@@ -722,15 +817,15 @@ ipcMain.handle("settings:removeKey", (_event, { provider, id }) => {
   if (!PROVIDER_IDS.includes(provider)) return { ok: false, error: "Invalid provider." };
   const settings = readSettings({ purgeBadKeys: true });
   if (!settings.apiKeys[provider]) return { ok: false };
-  
+
   const wasActive = settings.apiKeys[provider].find(k => k.id === id)?.active;
   settings.apiKeys[provider] = settings.apiKeys[provider].filter(k => k.id !== id);
-  
+
   // If we removed the active key, make the first remaining one active
   if (wasActive && settings.apiKeys[provider].length > 0) {
     settings.apiKeys[provider][0].active = true;
   }
-  
+
   writeSettings(settings);
   return { ok: true };
 });
@@ -739,11 +834,11 @@ ipcMain.handle("settings:toggleKey", (_event, { provider, id }) => {
   if (!PROVIDER_IDS.includes(provider)) return { ok: false, error: "Invalid provider." };
   const settings = readSettings({ purgeBadKeys: true });
   if (!settings.apiKeys[provider]) return { ok: false };
-  
+
   for (const k of settings.apiKeys[provider]) {
     k.active = (k.id === id);
   }
-  
+
   writeSettings(settings);
   return { ok: true };
 });
@@ -784,7 +879,7 @@ ipcMain.handle("skills:save", (_event, skill) => {
   } else {
     skills.push(skill);
   }
-  
+
   if (skill.active) {
     const activeSkills = skills.filter((s) => s.active);
     if (activeSkills.length > MAX_ACTIVE_SKILLS) {
@@ -850,10 +945,10 @@ function appendLlmLog(entry) {
       if (fs.existsSync(file) && fs.statSync(file).size > 512 * 1024) {
         fs.renameSync(file, `${file}.1`);
       }
-    } catch {}
+    } catch { }
     const line = JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n";
     fs.appendFileSync(file, line, "utf8");
-  } catch {}
+  } catch { }
 }
 
 ipcMain.handle("chat:send", async (_event, { prompt, provider: providerId, model, referenceImage, clientJobId } = {}) => {
@@ -877,6 +972,22 @@ ipcMain.handle("chat:send", async (_event, { prompt, provider: providerId, model
       ok: false,
       error: `No ${provider.label} API key set. Add ${provider.keyEnv} to .env or paste it in Settings.`,
     };
+  }
+  // Local runs need the Ollama server up and a downloaded model picked —
+  // neither can be auto-fixed here, so fail fast with actionable copy.
+  if (provider.id === "ollama") {
+    if (!(await ollamaReachable(true))) {
+      return {
+        ok: false,
+        error: "Ollama is not running. Start the Ollama app on this machine (get it free at ollama.com), then pick a downloaded local model in the AI dropdown.",
+      };
+    }
+    if (!model) {
+      return {
+        ok: false,
+        error: "No local model selected. Download one in Settings → Local Models, then choose it in the AI dropdown.",
+      };
+    }
   }
   console.log("[cadara] using", provider.label, "with model", model || "(auto)");
 
@@ -913,8 +1024,17 @@ ipcMain.handle("chat:send", async (_event, { prompt, provider: providerId, model
   // Provider fallback chain: the selected provider first, then every other
   // provider with a configured key. A terminal rate limit (or a dead key)
   // on one provider hops to the next instead of killing the run.
-  const fallbackChain = [provider, ...Object.values(PROVIDERS).filter((p) => p.id !== provider.id)]
-    .filter((p) => keyFor(p));
+  // Ollama is deliberately excluded from auto-hopping in BOTH directions:
+  // choosing local means staying local (offline/free consent), and cloud
+  // runs never silently fall back to a much weaker local model.
+  const fallbackChain = provider.id === "ollama"
+    ? [provider]
+    : [provider, ...Object.values(PROVIDERS).filter((p) => p.id !== provider.id && p.id !== "ollama")]
+      .filter((p) => keyFor(p));
+
+  // Ollama models run under a derived variant with a raised context window
+  // so long CAD prompts are never truncated (see ensureOllamaCtxModel).
+  const selectedModel = provider.id === "ollama" ? await ensureOllamaCtxModel(model) : model;
 
   const attemptTrail = []; // { label, kind, message } per failed provider
   try {
@@ -932,7 +1052,7 @@ ipcMain.handle("chat:send", async (_event, { prompt, provider: providerId, model
           provider: prov.id,
           // The user's model choice only applies to the provider they picked;
           // fallbacks auto-select from their own catalogs.
-          model: i === 0 ? model : "",
+          model: i === 0 ? selectedModel : "",
           modelsRoot: getModelsRoot(),
           sessionSnapshot: cadSession.snapshot(),
           referenceImage: normalizedReferenceImage,
@@ -958,8 +1078,8 @@ ipcMain.handle("chat:send", async (_event, { prompt, provider: providerId, model
         attemptTrail.push({
           label: prov.label,
           kind: err?.quotaScope === "day" ? "daily quota exhausted" :
-                err?.quotaScope === "account" ? "account out of credits" :
-                err?.rateLimited ? "rate-limited" : "failed",
+            err?.quotaScope === "account" ? "account out of credits" :
+              err?.rateLimited ? "rate-limited" : "failed",
           message,
         });
         appendLlmLog({ event: "provider_attempt", provider: prov.id, outcome: hopWorthy && i < fallbackChain.length - 1 ? "hopped" : "final", error: message.slice(0, 500) });
@@ -1000,7 +1120,13 @@ ipcMain.handle("texture:generate", async (_event, { description, provider: provi
   }
 
   const { texturePrompt } = await import("./agent/prompts.mjs");
-  const llm = new LLM({ provider: provider.id, apiKey, model });
+  // Ollama models run under the derived high-context variant (see
+  // ensureOllamaCtxModel) so the texture prompt is never truncated.
+  const llm = new LLM({
+    provider: provider.id,
+    apiKey,
+    model: provider.id === "ollama" ? await ensureOllamaCtxModel(model) : model,
+  });
 
   const partFacts = {
     slug: artifact.slug,
@@ -1091,7 +1217,7 @@ ipcMain.handle("session:restore", async (_event, { entry } = {}) => {
 
 ipcMain.handle("file:export", async (event, { relPath, format, name, dataUrl } = {}) => {
   const filePath = path.join(getModelsRoot(), relPath || "");
-  
+
   // Fail before showing a dialog when the source part is gone instead of
   // surfacing an obscure conversion error after the user picked a location.
   if (!fs.existsSync(filePath)) {
@@ -1101,19 +1227,19 @@ ipcMain.handle("file:export", async (event, { relPath, format, name, dataUrl } =
     };
   }
   const defaultPath = name ? path.join(app.getPath("downloads"), name) : undefined;
-  
+
   // Set up filters based on format
-  const extensions = format === "3mf" ? ["3mf"] : 
-                     format === "obj" ? ["obj"] :
-                     format === "ply" ? ["ply"] :
-                     format === "iges" ? ["iges", "igs"] :
-                     format === "dxf" ? ["dxf"] :
-                     format === "svg" ? ["svg"] :
-                     format === "png" ? ["png"] :
-                     format === "step" ? ["step", "stp"] :
-                     format === "stl" ? ["stl"] :
-                     format === "glb" ? ["glb"] : ["*"];
-                     
+  const extensions = format === "3mf" ? ["3mf"] :
+    format === "obj" ? ["obj"] :
+      format === "ply" ? ["ply"] :
+        format === "iges" ? ["iges", "igs"] :
+          format === "dxf" ? ["dxf"] :
+            format === "svg" ? ["svg"] :
+              format === "png" ? ["png"] :
+                format === "step" ? ["step", "stp"] :
+                  format === "stl" ? ["stl"] :
+                    format === "glb" ? ["glb"] : ["*"];
+
   // Test hook: CADARA_EXPORT_DEST skips the native save dialog so automated
   // runs can verify exports end-to-end. Never set in normal use.
   // CADARA_E2E_EXPORTS likewise routes to a per-format destination under
@@ -1123,99 +1249,101 @@ ipcMain.handle("file:export", async (event, { relPath, format, name, dataUrl } =
     : process.env.CADARA_E2E_EXPORTS
       ? { canceled: false, filePath: path.join(process.env.CADARA_EXPORT_DEST_DIR || os.tmpdir(), name || `part.${format}`) }
       : await dialog.showSaveDialog(mainWindow, {
-          defaultPath,
-          filters: [{ name: `${format.toUpperCase()} Files`, extensions }],
-        });
-  
-  if (canceled || !dest) return { ok: false, canceled: true };
-  
-    try {
-      // STL/GLB already exist as build-time sidecars next to the STEP — copy
-      // the genuine article. Copying the STEP bytes under another extension
-      // (the old behavior) produces files no tool can open.
-      if (format === "stl" || format === "glb") {
-        const candidates =
-          format === "glb"
-            ? [path.join(path.dirname(filePath), "part.glb"), path.join(path.dirname(filePath), ".part.step.glb")]
-            : [path.join(path.dirname(filePath), `part.${format}`)];
-        const sidecar = candidates.find((c) => fs.existsSync(c));
-        if (sidecar) {
-          await fsPromises.copyFile(sidecar, dest);
-          return { ok: true, path: dest };
-        }
-        // No sidecar on disk: convert from the STEP rather than dead-ending.
-      }
+        defaultPath,
+        filters: [{ name: `${format.toUpperCase()} Files`, extensions }],
+      });
 
-      // If it's a natively generated file, just copy it
-      if (format === "step") {
-        await fsPromises.copyFile(filePath, dest);
+  if (canceled || !dest) return { ok: false, canceled: true };
+
+  try {
+    // STL/GLB already exist as build-time sidecars next to the STEP — copy
+    // the genuine article. Copying the STEP bytes under another extension
+    // (the old behavior) produces files no tool can open.
+    if (format === "stl" || format === "glb") {
+      const candidates =
+        format === "glb"
+          ? [path.join(path.dirname(filePath), "part.glb"), path.join(path.dirname(filePath), ".part.step.glb")]
+          : [path.join(path.dirname(filePath), `part.${format}`)];
+      const sidecar = candidates.find((c) => fs.existsSync(c));
+      if (sidecar) {
+        await fsPromises.copyFile(sidecar, dest);
         return { ok: true, path: dest };
       }
+      // No sidecar on disk: convert from the STEP rather than dead-ending.
+    }
 
-      // Send progress event
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("file:exportProgress", { status: "converting", format });
+    // If it's a natively generated file, just copy it
+    if (format === "step") {
+      await fsPromises.copyFile(filePath, dest);
+      return { ok: true, path: dest };
+    }
+
+    // Send progress event
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("file:exportProgress", { status: "converting", format });
+    }
+
+    // PNG is a render, not a conversion. Preferred path: the renderer sends
+    // a high-resolution capture of the exact view the user sees (dataUrl).
+    // Fallback: the snapshot CLI renders the STEP offscreen at presentation
+    // resolution (2400x1600). Both land at the exact path the user chose.
+    if (format === "png") {
+      if (typeof dataUrl === "string" && dataUrl.startsWith("data:image/png;base64,")) {
+        try {
+          const buf = Buffer.from(dataUrl.slice("data:image/png;base64,".length), "base64");
+          if (!buf.length) throw new Error("empty capture");
+          await fsPromises.writeFile(dest, buf);
+          return { ok: true, path: dest };
+        } catch (err) {
+          return { ok: false, error: "PNG capture failed: " + String(err.message || err) };
+        }
       }
 
-      // PNG is a render, not a conversion. Preferred path: the renderer sends
-      // a high-resolution capture of the exact view the user sees (dataUrl).
-      // Fallback: the snapshot CLI renders the STEP offscreen at presentation
-      // resolution (2400x1600). Both land at the exact path the user chose.
-      if (format === "png") {
-        if (typeof dataUrl === "string" && dataUrl.startsWith("data:image/png;base64,")) {
-          try {
-            const buf = Buffer.from(dataUrl.slice("data:image/png;base64,".length), "base64");
-            if (!buf.length) throw new Error("empty capture");
-            await fsPromises.writeFile(dest, buf);
-            return { ok: true, path: dest };
-          } catch (err) {
-            return { ok: false, error: "PNG capture failed: " + String(err.message || err) };
+      const python = getCadPython();
+      const snapshotScript = path.join(getBundledCadRuntime(), "scripts", "snapshot");
+      const outDir = path.dirname(dest);
+      const base = path.basename(dest, path.extname(dest));
+      const renderTarget = path.join(outDir, base + ".png");
+      return new Promise((resolve) => {
+        const child = spawn(python, [
+          snapshotScript,
+          "--input", filePath,
+          "--output", renderTarget,
+          "--width", "2400",
+          "--height", "1600",
+        ], { cwd: outDir, env: { ...process.env } });
+
+        let stderr = "";
+        child.stderr.on("data", (data) => stderr += data.toString());
+        const killTimer = setTimeout(() => child.kill("SIGKILL"), 120000);
+        child.on("close", async (code) => {
+          clearTimeout(killTimer);
+          if (code !== 0) {
+            resolve({ ok: false, error: "PNG render failed: " + stderr.slice(-400) });
+            return;
           }
-        }
-
-        const python = getCadPython();
-        const snapshotScript = path.join(getBundledCadRuntime(), "scripts", "snapshot");
-        const outDir = path.dirname(dest);
-        const base = path.basename(dest, path.extname(dest));
-        const renderTarget = path.join(outDir, base + ".png");
-        return new Promise((resolve) => {
-          const child = spawn(python, [
-            snapshotScript,
-            "--input", filePath,
-            "--output", renderTarget,
-            "--width", "2400",
-            "--height", "1600",
-          ], { cwd: outDir, env: { ...process.env } });
-
-          let stderr = "";
-          child.stderr.on("data", (data) => stderr += data.toString());
-          const killTimer = setTimeout(() => child.kill("SIGKILL"), 120000);
-          child.on("close", async (code) => {
-            clearTimeout(killTimer);
-            if (code !== 0) {
-              resolve({ ok: false, error: "PNG render failed: " + stderr.slice(-400) });
+          try {
+            const candidates = (await fsPromises.readdir(outDir))
+              .filter((f) => (f.startsWith(base + "_") || f === base + ".png") && f.endsWith(".png"))
+              .map((f) => path.join(outDir, f));
+            if (!candidates.length) {
+              resolve({ ok: false, error: "PNG render produced no file." });
               return;
             }
-            try {
-              const candidates = (await fsPromises.readdir(outDir))
-                .filter((f) => f.startsWith(base + "_") && f.endsWith(".png"))
-                .map((f) => path.join(outDir, f));
-              if (!candidates.length) {
-                resolve({ ok: false, error: "PNG render produced no file." });
-                return;
-              }
-              const newest = candidates.sort().at(-1);
+            const newest = candidates.sort().at(-1);
+            if (newest !== dest) {
               await fsPromises.rm(dest, { force: true });
               await fsPromises.rename(newest, dest);
-              resolve({ ok: true, path: dest });
-            } catch (err) {
-              resolve({ ok: false, error: String(err.message || err) });
             }
-          });
+            resolve({ ok: true, path: dest });
+          } catch (err) {
+            resolve({ ok: false, error: String(err.message || err) });
+          }
         });
-      }
+      });
+    }
 
-      // Otherwise run the conversion script
+    // Otherwise run the conversion script
     const python = getCadPython();
     const script = path.join(getBundledCadRuntime(), "scripts", "export_formats.py");
     const dir = path.dirname(filePath);
@@ -1228,10 +1356,10 @@ ipcMain.handle("file:export", async (event, { relPath, format, name, dataUrl } =
         cwd: dir,
         env: { ...process.env, ...exportEnv },
       });
-      
+
       let stderr = "";
       child.stderr.on("data", (data) => stderr += data.toString());
-      
+
       child.on("close", (code) => {
         if (code === 0) {
           resolve({ ok: true, path: dest });
@@ -1260,13 +1388,23 @@ ipcMain.handle("app:meta", async () => {
   const providers = {};
   for (const provider of Object.values(PROVIDERS)) {
     const key = keyFor(provider);
-    // OpenRouter's model catalog is public — fetch it even without a
-    // stored key so the dropdown is never empty.
-    const models =
-      key || provider.id === "openrouter" ? await listModels(provider.id, key) : null;
+    let models = null;
+    let hasKey = Boolean(key);
+    if (provider.id === "ollama") {
+      // The dropdown must show ONLY the models actually downloaded, so the
+      // catalog comes live from the server; an unreachable server yields an
+      // empty catalog (rendered as "start Ollama / download a model" hints).
+      models = (await ollamaReachable()) ? await listModels(provider.id, "ollama") : [];
+      hasKey = Array.isArray(models);
+    } else {
+      // OpenRouter's model catalog is public — fetch it even without a
+      // stored key so the dropdown is never empty.
+      models = key || provider.id === "openrouter" ? await listModels(provider.id, key) : null;
+    }
     providers[provider.id] = {
       label: provider.label,
-      hasKey: Boolean(key),
+      hasKey,
+      local: Boolean(provider.local),
       models,
       packets: listModelPackets(provider.id, models || []),
     };
@@ -1279,4 +1417,93 @@ ipcMain.handle("app:meta", async () => {
     defaultProvider: process.env.LLM_PROVIDER || null,
     defaultModel: process.env.LLM_MODEL || null,
   };
+});
+
+// ---------- Ollama management IPC ----------
+
+// Server status + the models physically downloaded on this machine.
+ipcMain.handle("ollama:status", async () => {
+  const reachable = await ollamaReachable(true);
+  const models = [];
+  if (reachable) {
+    try {
+      const res = await fetch(ollamaBaseUrl() + "/api/tags", { signal: AbortSignal.timeout(4000) });
+      if (res.ok) {
+        const data = await res.json();
+        for (const m of data.models || []) {
+          models.push({
+            name: m.name || m.model || "",
+            size: Number(m.size) || 0,
+            modified: m.modified_at || null,
+          });
+        }
+      }
+    } catch { }
+  }
+  return { ok: true, reachable, url: ollamaBaseUrl(), models };
+});
+
+// Download a model via Ollama's streaming pull endpoint. Progress is
+// forwarded to the renderer as ollama:pullProgress events; the IPC returns
+// immediately so the UI never blocks on a multi-GB download.
+ipcMain.handle("ollama:pull", async (_event, { model } = {}) => {
+  const name = String(model || "").trim();
+  if (!name || !/^[a-z0-9._:\-\/]+$/i.test(name)) {
+    return { ok: false, error: "Invalid model name." };
+  }
+  if (!(await ollamaReachable(true))) {
+    return { ok: false, error: "Ollama is not running. Start the Ollama app first, then download models." };
+  }
+  const send = (payload) => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("ollama:pullProgress", { model: name, ...payload });
+    }
+  };
+  (async () => {
+    try {
+      const res = await fetch(ollamaBaseUrl() + "/api/pull", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model: name, stream: true }),
+      });
+      if (!res.ok || !res.body) {
+        const text = await res.text().catch(() => "");
+        send({ done: true, error: `Ollama returned HTTP ${res.status}. ${text.slice(0, 200)}` });
+        return;
+      }
+      const decoder = new TextDecoder();
+      let buffer = "";
+      for await (const chunk of res.body) {
+        buffer += decoder.decode(chunk, { stream: true });
+        let idx;
+        while ((idx = buffer.indexOf("\n")) >= 0) {
+          const line = buffer.slice(0, idx).trim();
+          buffer = buffer.slice(idx + 1);
+          if (!line) continue;
+          let evt = null;
+          try { evt = JSON.parse(line); } catch { continue; }
+          if (evt.error) {
+            send({ done: true, error: String(evt.error).slice(0, 300) });
+            return;
+          }
+          send({
+            status: evt.status || "",
+            percent:
+              typeof evt.total === "number" && evt.total > 0 && typeof evt.completed === "number"
+                ? Math.min(100, Math.round((evt.completed / evt.total) * 100))
+                : null,
+            done: Boolean(evt.done),
+          });
+          if (evt.done) {
+            ollamaUpCache = { up: true, at: Date.now() };
+            return;
+          }
+        }
+      }
+      send({ done: true });
+    } catch (err) {
+      send({ done: true, error: String(err?.message || err).slice(0, 300) });
+    }
+  })();
+  return { ok: true };
 });

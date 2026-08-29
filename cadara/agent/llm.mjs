@@ -49,6 +49,18 @@ export const PROVIDERS = {
     keyEnv: "OPENROUTER_API_KEY",
     settingsKey: "openrouterApiKey",
   },
+  // Fully local inference via Ollama (https://ollama.com). Same
+  // OpenAI-compatible contract as the cloud providers above — tool calling,
+  // vision, and /v1/models all work against http://localhost:11434/v1. No
+  // real API key exists; "ollama" is the conventional ignored placeholder.
+  ollama: {
+    id: "ollama",
+    label: "Ollama (Local)",
+    baseUrl: process.env.OLLAMA_BASE_URL || "http://localhost:11434/v1",
+    keyEnv: "OLLAMA_API_KEY",
+    settingsKey: "ollamaApiKey",
+    local: true,
+  },
 };
 
 export function providerById(id) {
@@ -77,6 +89,11 @@ export function modelSupportsVision(providerId, modelId = "") {
   }
   if (providerId === "openrouter") {
     return /gemini|gpt-|claude-|pixtral/i.test(modelId);
+  }
+  if (providerId === "ollama") {
+    // Vision-capable local families: Qwen-VL, LLaVA, Gemma 3+, MiniCPM-V,
+    // and anything explicitly named vision.
+    return /(^|[-_:])vl\b|vision|llava|gemma|minicpm|moondream/i.test(modelId);
   }
   return false;
 }
@@ -125,7 +142,7 @@ export function describeRateLimitBody(status, bodyText) {
   let data = null;
   try {
     data = JSON.parse(String(bodyText || ""));
-  } catch {}
+  } catch { }
   const err = data?.error || {};
   out.detail = String(err.message || "").slice(0, 500);
   const details = Array.isArray(err.details) ? err.details : [];
@@ -331,6 +348,18 @@ const MODEL_INFO = {
     { match: /opus|gpt-5(?!-(mini|nano))|gemini-.*-pro|qwen3?-max|deepseek-r1/i, tier: "ultra", price: "premium tier", rank: 2 },
     { match: /sonnet|flash|mini|nano|haiku|air|small|chat|glm-[45]|kimi|plus|llama|turbo/i, tier: "value", price: "low-to-mid cost tier", rank: 1 },
   ],
+  ollama: [
+    // Everything local is free; order reflects the recommended CAD presets.
+    { match: /qwen2\.5-coder:7b/i, tier: "local · free", price: "runs on your machine — fast default for CAD", rank: 0 },
+    { match: /qwen2\.5-coder:14b/i, tier: "local · free", price: "runs on your machine — stronger geometry code", rank: 1 },
+    { match: /qwen3-coder:30b/i, tier: "local · free", price: "runs on your machine — best local CAD quality (MoE, fast)", rank: 2 },
+    { match: /qwen2\.5-coder/i, tier: "local · free", price: "runs on your machine — code-specialized", rank: 3 },
+    { match: /qwen3-coder/i, tier: "local · free", price: "runs on your machine — agentic coding", rank: 3 },
+    { match: /qwen3(?![-:]?[0-9])/i, tier: "local · free", price: "runs on your machine — general + tools", rank: 4 },
+    { match: /gpt-oss/i, tier: "local · free", price: "runs on your machine — OpenAI open weights", rank: 4 },
+    { match: /llama/i, tier: "local · free", price: "runs on your machine — general fallback", rank: 5 },
+    { match: /vl|vision|llava|gemma|minicpm|moondream/i, tier: "local · free · vision", price: "runs on your machine — reads reference images", rank: 6 },
+  ],
 };
 
 export const MODEL_PACKETS = {
@@ -498,6 +527,32 @@ export const MODEL_PACKETS = {
       preferredModels: ["google/gemini-2.5-pro", "anthropic/claude-opus-4.1"],
     },
   ],
+  ollama: [
+    {
+      id: "ollama-fast",
+      label: "Local Fast",
+      cost: "free",
+      priceNote: "Runs entirely on your machine — no API cost.",
+      description: "Qwen2.5-Coder 7B: quick local CAD for simple parts, plates, holes, and brackets. Needs ~8 GB RAM.",
+      preferredModels: ["qwen2.5-coder:7b", "qwen2.5-coder:latest"],
+    },
+    {
+      id: "ollama-balanced",
+      label: "Local Balanced",
+      cost: "free",
+      priceNote: "Runs entirely on your machine — no API cost.",
+      description: "Qwen2.5-Coder 14B: noticeably better geometry code and fewer repair loops. Needs ~16 GB RAM.",
+      preferredModels: ["qwen2.5-coder:14b", "qwen2.5-coder:7b"],
+    },
+    {
+      id: "ollama-max",
+      label: "Local Max",
+      cost: "free",
+      priceNote: "Runs entirely on your machine — no API cost.",
+      description: "Qwen3-Coder 30B (MoE, 3.3B active): the best local CAD quality at near-8B speed. Needs ~24-32 GB RAM.",
+      preferredModels: ["qwen3-coder:30b", "qwen2.5-coder:32b", "qwen2.5-coder:14b"],
+    },
+  ],
 };
 
 function modelInfo(providerId, modelId) {
@@ -655,6 +710,19 @@ export async function listModels(providerId, apiKey) {
         openrouterPricing.set(String(m.id), Number(m.pricing?.prompt ?? NaN));
       }
       ids = rows.slice(0, 30).map((m) => String(m.id));
+    } else if (providerId === "ollama") {
+      // Ollama's /v1/models lists exactly the models installed locally —
+      // which is what the dropdown should show. Filter out Ollama's paid
+      // "-cloud" routes and non-chat models.
+      const res = await fetch(`${provider.baseUrl}/models`, {
+        headers: { Authorization: `Bearer ${apiKey}` },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      ids = (data.data || [])
+        .map((m) => m.id)
+        .filter((id) => !/(-cloud|embed|whisper|tts|guard|rerank|bge-|nomic|mxbai)/i.test(id));
     } else {
       const res = await fetch(`${provider.baseUrl}/models`, {
         headers: { Authorization: `Bearer ${apiKey}` },
@@ -703,6 +771,14 @@ export async function listModels(providerId, apiKey) {
       "openai/gpt-4.1-mini",
       "google/gemini-2.5-pro",
     ],
+    ollama: [
+      "qwen2.5-coder:7b",
+      "qwen2.5-coder:14b",
+      "qwen3-coder:30b",
+      "qwen3:8b",
+      "gpt-oss:20b",
+      "qwen3-vl:8b",
+    ],
   };
   if (!ids.length) ids = FALLBACK[providerId] || [];
 
@@ -712,12 +788,14 @@ export async function listModels(providerId, apiKey) {
 }
 
 export class LLM {
-  constructor({ provider: providerId, apiKey, model, timeoutMs = 75000, retryDelayScale = 1, rateLimitMaxAttempts = 5, rateLimitBudgetMs = 60000 } = {}) {
+  constructor({ provider: providerId, apiKey, model, timeoutMs = null, retryDelayScale = 1, rateLimitMaxAttempts = 5, rateLimitBudgetMs = 60000 } = {}) {
     const provider = providerById(providerId);
     if (!provider) throw new LLMConfigError(`Unknown provider: ${providerId}`);
     this.providerId = providerId;
     this.provider = provider;
-    this.apiKey = apiKey || process.env[provider.keyEnv];
+    // Local runtimes (Ollama) don't use API keys — "ollama" is the
+    // conventional ignored placeholder. Cloud providers require a real key.
+    this.apiKey = apiKey || process.env[provider.keyEnv] || (provider.local ? "ollama" : "");
     this.model = model;
     // True when the caller pinned an exact model id; auto-selected models may
     // silently hop candidates on retirement errors, pinned ones may not.
@@ -725,7 +803,10 @@ export class LLM {
     this._usedModels = new Set();
     if (model) this._usedModels.add(model);
     this._candidatePool = null;
-    this.timeoutMs = timeoutMs;
+    // Local models generate far slower than hosted APIs (a 7B on Apple
+    // Silicon runs ~40-60 tok/s and the pipeline makes many calls), so the
+    // per-request timeout is stretched hard for local providers.
+    this.timeoutMs = timeoutMs ?? (provider.local ? 300000 : 75000);
     // retryDelayScale shrinks sleeps so tests run in milliseconds.
     this.retryDelayScale = retryDelayScale;
     this.rateLimitMaxAttempts = Math.max(1, rateLimitMaxAttempts);
@@ -763,14 +844,14 @@ export class LLM {
     if (typeof globalThis.__cadaraLlmTelemetry === "function") {
       try {
         globalThis.__cadaraLlmTelemetry(entry);
-      } catch {}
+      } catch { }
       return;
     }
     const logPath = process.env.CADARA_AGENT_LOG;
     if (!logPath) return;
     try {
       fs.appendFileSync(logPath, JSON.stringify({ ts: new Date().toISOString(), ...entry }) + "\n", "utf8");
-    } catch {}
+    } catch { }
   }
 
   async chat({ messages, tools = null, temperature = 0.4, onRetry = null }) {
@@ -885,7 +966,7 @@ export class LLM {
           const tried = [...this._usedModels];
           throw new LLMConfigError(
             `${this.provider.label}: no usable model (tried ${tried.join(", ")}). Last error: ${err.message}` +
-              (this.modelExplicit ? " Pick a different model in AI Config." : ""),
+            (this.modelExplicit ? " Pick a different model in AI Config." : ""),
             { fallbackable: true }
           );
         }
@@ -1017,7 +1098,7 @@ export class LLM {
     let data = {};
     try {
       data = JSON.parse(rawText);
-    } catch {}
+    } catch { }
     const errType = data?.error?.type || "";
     const errMsg = data?.error?.message || "";
 

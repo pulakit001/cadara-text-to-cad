@@ -53,3 +53,4 @@ vendor/
 
 # ── Python egg-info ──
 **/*.egg-info/
+.aider*

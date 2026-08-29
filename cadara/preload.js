@@ -53,5 +53,14 @@ contextBridge.exposeInMainWorld("cadara", {
     generate: (description, provider, model, artifact) =>
       ipcRenderer.invoke("texture:generate", { description, provider, model, artifact }),
   },
+  ollama: {
+    status: () => ipcRenderer.invoke("ollama:status"),
+    pull: (model) => ipcRenderer.invoke("ollama:pull", { model }),
+    onPullProgress: (cb) => {
+      const listener = (_event, data) => cb(data);
+      ipcRenderer.on("ollama:pullProgress", listener);
+      return () => ipcRenderer.removeListener("ollama:pullProgress", listener);
+    },
+  },
   meta: () => ipcRenderer.invoke("app:meta"),
 });

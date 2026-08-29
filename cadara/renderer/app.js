@@ -22,6 +22,7 @@ const cadara = window.cadara || {
   }),
   settings: {
     get: async () => ({ hasGeminiKey: true }),
+    getKeys: async () => ({}),
     set: async () => ({ ok: true }),
     test: async () => ({ ok: true }),
   },
@@ -129,6 +130,11 @@ const FALLBACK_PACKETS = {
     { id: "or-performance", label: "OR Performance", cost: "medium", priceNote: "Balanced cost and capability.", description: "Strong CAD reasoning from flagship models.", model: "anthropic/claude-sonnet-4.5", supportsVision: true },
     { id: "or-ultra", label: "OR Ultra", cost: "highest", priceNote: "Premium models via OpenRouter.", description: "Complex logic and geometry.", model: "google/gemini-2.5-pro", supportsVision: true },
   ],
+  ollama: [
+    { id: "ollama-fast", label: "Local Fast", cost: "free", priceNote: "Runs on your machine.", description: "Qwen2.5-Coder 7B for simple local CAD.", model: "qwen2.5-coder:7b", supportsVision: false },
+    { id: "ollama-balanced", label: "Local Balanced", cost: "free", priceNote: "Runs on your machine.", description: "Qwen2.5-Coder 14B, better geometry code.", model: "qwen2.5-coder:14b", supportsVision: false },
+    { id: "ollama-max", label: "Local Max", cost: "free", priceNote: "Runs on your machine.", description: "Qwen3-Coder 30B MoE — best local CAD quality.", model: "qwen3-coder:30b", supportsVision: false },
+  ],
 };
 
 const els = {
@@ -164,18 +170,6 @@ const els = {
   skillBody: document.getElementById('skill-body'),
   skillsList: document.getElementById('skills-list'),
   skillsNote: document.getElementById('skills-note'),
-  aiConfigForm: document.getElementById('ai-config-form'),
-  aiTemp: document.getElementById('ai-temp'),
-  aiIter: document.getElementById('ai-iter'),
-  aiWall: document.getElementById('ai-wall'),
-  aiTol: document.getElementById('ai-tol'),
-  aiFillet: document.getElementById('ai-fillet'),
-  aiPreprompt: document.getElementById('ai-preprompt'),
-  tempVal: document.getElementById('temp-val'),
-  iterVal: document.getElementById('iter-val'),
-  wallVal: document.getElementById('wall-val'),
-  tolVal: document.getElementById('tol-val'),
-  aiNote: document.getElementById('ai-note'),
   chat: document.getElementById("chat"),
   suggestions: document.getElementById("suggestions"),
   agentTrace: document.getElementById("agent-trace"),
@@ -192,21 +186,30 @@ const els = {
   referenceNote: document.getElementById("reference-note"),
   referenceRemove: document.getElementById("reference-remove"),
   sendBtn: document.getElementById("send-btn"),
-  chatEmptyState: document.getElementById("chat-empty-state"),
   cancelBtn: document.getElementById("cancel-btn"),
 
-  // Landing Page
+  // Tune panel (design constraint sliders)
+  tuneBtn: document.getElementById("tune-btn"),
+  tunePanel: document.getElementById("tune-panel"),
+  tuneResetBtn: document.getElementById("tune-reset"),
+  tuneSliders: Array.from(document.querySelectorAll(".tune-panel input[type=range]")),
+
+  // Projects Home
   landingPage: document.getElementById("landing-page"),
-  startDesigningBtn: document.getElementById("start-designing-btn"),
+  homeBtn: document.getElementById("home-btn"),
+  projectsGrid: document.getElementById("projects-grid"),
+  projectsResumeBtn: document.getElementById("projects-resume-btn"),
+  projectsResumeLabel: document.getElementById("projects-resume-label"),
+  projectRenameModal: document.getElementById("project-rename-modal"),
+  projectRenameInput: document.getElementById("project-rename-input"),
+  projectRenameSave: document.getElementById("project-rename-save"),
+  projectRenameCancel: document.getElementById("project-rename-cancel"),
 
   retryBtn: document.getElementById("retry-btn"),
   iterChip: document.getElementById("iter-chip"),
-  statusLine: document.getElementById("status-line"),
   viewerEmpty: document.getElementById("viewer-empty"),
   viewerOverlay: document.getElementById("viewer-overlay"),
-  saveStlBtn: document.getElementById("save-stl"),
-  editCadBtn: document.getElementById("edit-cad-btn"),
-  
+
   viewerLoading: document.getElementById("viewer-loading"),
   viewerLoadingText: document.getElementById("viewer-loading-text"),
   artifactName: document.getElementById("artifact-name"),
@@ -229,6 +232,32 @@ const els = {
   exportProgress: document.getElementById("export-progress"),
   progressBarFill: document.getElementById("progress-bar-fill"),
   progressStatus: document.getElementById("progress-status"),
+  exportDone: document.getElementById("export-done"),
+  exportPath: document.getElementById("export-path"),
+  exportReveal: document.getElementById("export-reveal"),
+
+  // Part details drawer
+  detailsBtn: document.getElementById("details-btn"),
+  detailsDrawer: document.getElementById("details-drawer"),
+  detailsClose: document.getElementById("details-close"),
+  detailsSummary: document.getElementById("details-summary"),
+  detailsFeaturesSec: document.getElementById("details-features-sec"),
+  detailsFeatures: document.getElementById("details-features"),
+  detailsAssumptionsSec: document.getElementById("details-assumptions-sec"),
+  detailsAssumptions: document.getElementById("details-assumptions"),
+  detailsGeometrySec: document.getElementById("details-geometry-sec"),
+  detailsGeometry: document.getElementById("details-geometry"),
+  detailsMetaSec: document.getElementById("details-meta-sec"),
+  detailsMeta: document.getElementById("details-meta"),
+
+  // Local models (Ollama)
+  ollamaStatusDot: document.getElementById("ollama-status-dot"),
+  ollamaStatusText: document.getElementById("ollama-status-text"),
+  ollamaInstallLink: document.getElementById("ollama-install-link"),
+  ollamaRefreshBtn: document.getElementById("ollama-refresh-btn"),
+  ollamaRecommended: document.getElementById("ollama-recommended"),
+  ollamaInstalled: document.getElementById("ollama-installed"),
+  ollamaLocalNote: document.getElementById("ollama-local-note"),
 };
 
 const EXAMPLE_PROMPTS = [
@@ -237,10 +266,22 @@ const EXAMPLE_PROMPTS = [
   "A hollow enclosure 80 × 60 × 40 mm with 3 mm walls, open top, and four M3 standoffs inside",
 ];
 
+const PROVIDER_LABELS = {
+  gemini: "Gemini",
+  zai: "Z.AI",
+  qwen: "Qwen",
+  openai: "OpenAI",
+  claude: "Claude",
+  openrouter: "OpenRouter",
+  ollama: "Ollama (Local)",
+};
+
 let modelsRoot = "";
 let meta = null;
 let busy = false;
 let lastArtifact = null;
+let lastExportPath = null;
+let lastResultInfo = null;
 let viewer = null;
 let unsubEvents = null;
 let doneReceived = false;
@@ -254,10 +295,10 @@ let activeClientJobId = null;
 let runSerial = 0;
 let retryTimer = null;
 const agentState = new Map();
-const providerCatalogs = { gemini: null, zai: null, qwen: null, openai: null, claude: null, openrouter: null };
-const providerPackets = { gemini: null, zai: null, qwen: null, openai: null, claude: null, openrouter: null };
-const selectedModelByProvider = { gemini: null, zai: null, qwen: null, openai: null, claude: null, openrouter: null };
-const selectedPacketByProvider = { gemini: null, zai: null, qwen: null, openai: null, claude: null, openrouter: null };
+const providerCatalogs = { gemini: null, zai: null, qwen: null, openai: null, claude: null, openrouter: null, ollama: null };
+const providerPackets = { gemini: null, zai: null, qwen: null, openai: null, claude: null, openrouter: null, ollama: null };
+const selectedModelByProvider = { gemini: null, zai: null, qwen: null, openai: null, claude: null, openrouter: null, ollama: null };
+const selectedPacketByProvider = { gemini: null, zai: null, qwen: null, openai: null, claude: null, openrouter: null, ollama: null };
 
 // Pipeline dashboard state
 let pipelineStartedAt = null;
@@ -269,6 +310,7 @@ let lastThinkingText = "";
 
 const viewerEl = document.getElementById("viewer");
 const HISTORY_KEY = "cadara.previousChats.v1";
+const PROJECTS_KEY = "cadara.projects.v1";
 const MAX_REFERENCE_BYTES = 10 * 1024 * 1024;
 const IMAGE_MIME_TYPES = new Set(["image/png", "image/jpeg", "image/webp"]);
 const EMPTY_IMAGE_SRC = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///ywAAAAAAQABAAACAUwAOw==";
@@ -289,17 +331,43 @@ function selectedModelSupportsVision() {
   if (provider === "qwen") return false;
   if (provider === "openai") return /gpt-[45]|o[34]|vision|omni/i.test(els.modelSelect.value || "");
   if (provider === "claude") return /^claude-/i.test(els.modelSelect.value || "");
+  if (provider === "ollama") {
+    // Local vision families (Qwen-VL, LLaVA, Gemma, MiniCPM…). Local catalog
+    // entries carry no supportsVision flag, so detect from the id.
+    return /(^|[-_:])vl\b|vision|llava|gemma|minicpm|moondream/i.test(els.modelSelect.value || "");
+  }
   return false;
 }
 
 function populateModels(provider) {
-  const catalog = providerCatalogs[provider] || FALLBACK_CATALOGS[provider] || [];
+  let catalog;
+  if (provider === "ollama") {
+    // Only models actually downloaded on this machine may be selected — the
+    // live catalog from Ollama IS the list. Never fall back to the
+    // recommended presets here; those belong to the download panel.
+    catalog = Array.isArray(providerCatalogs[provider]) ? providerCatalogs[provider] : [];
+  } else {
+    catalog = providerCatalogs[provider] || FALLBACK_CATALOGS[provider] || [];
+  }
   const previous = selectedModelByProvider[provider];
   const preferred =
     (meta &&
       ((provider === (meta.defaultProvider || provider) && meta.defaultModel) || null)) ||
     previous;
   els.modelSelect.innerHTML = "";
+  if (provider === "ollama" && catalog.length === 0) {
+    // Nothing downloaded yet (or Ollama isn't running) — show a hint instead
+    // of an empty dropdown, and point at the download panel.
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No local models — Settings → Local Models";
+    opt.disabled = true;
+    opt.selected = true;
+    els.modelSelect.appendChild(opt);
+    selectedModelByProvider[provider] = "";
+    updateReferenceControls();
+    return;
+  }
   catalog.forEach((m) => {
     const opt = document.createElement("option");
     opt.value = m.id;
@@ -315,8 +383,22 @@ function populateModels(provider) {
 }
 
 function populateTextureModels(provider) {
-  const catalog = providerCatalogs[provider] || FALLBACK_CATALOGS[provider] || [];
+  let catalog;
+  if (provider === "ollama") {
+    catalog = Array.isArray(providerCatalogs[provider]) ? providerCatalogs[provider] : [];
+  } else {
+    catalog = providerCatalogs[provider] || FALLBACK_CATALOGS[provider] || [];
+  }
   els.textureModelSelect.innerHTML = "";
+  if (provider === "ollama" && catalog.length === 0) {
+    const opt = document.createElement("option");
+    opt.value = "";
+    opt.textContent = "No local models";
+    opt.disabled = true;
+    opt.selected = true;
+    els.textureModelSelect.appendChild(opt);
+    return;
+  }
   catalog.forEach((m) => {
     const opt = document.createElement("option");
     opt.value = m.id;
@@ -339,6 +421,10 @@ function compactModelLabel(provider, modelId) {
     return modelId;
   }
   if (provider === "openai") return modelId.replace(/-/g, " ");
+  if (provider === "ollama") {
+    // Local ids like qwen2.5-coder:7b read best with the tag spelled out.
+    return modelId.replace(/:latest$/i, "").replace(":", " · ");
+  }
   if (provider === "claude") {
     return modelId
       .replace(/^claude-/i, "")
@@ -356,6 +442,7 @@ function currentProvider() {
 }
 
 function init() {
+  updateExportAvailability();
   populateProviderControls(els.providerSelect.value || "gemini");
   populateTextureModels(els.textureProviderSelect.value || "gemini");
   els.providerSelect.addEventListener("change", () => {
@@ -478,6 +565,10 @@ function handleEvent({ type, payload, clientJobId }) {
     stopPipelineTimer();
     settleRunningRows();
     setBusy(false);
+    if (payload.artifacts || payload.summary) {
+      lastResultInfo = { ...(lastResultInfo || {}), ...(payload.artifacts ? { artifacts: payload.artifacts } : {}), ...(payload.summary ? { summary: payload.summary } : {}) };
+      if (els.detailsDrawer && !els.detailsDrawer.hidden) populateDetailsDrawer();
+    }
     if (payload.summary) addMessage("assistant", payload.summary);
     if (payload.artifacts) showArtifact(payload.artifacts);
     saveCurrentChatToHistory({ artifact: payload.artifacts, summary: payload.summary || "" });
@@ -622,7 +713,6 @@ function settleRunningRows() {
 function setStatus(text) {
   els.iterChip.hidden = !text;
   els.iterChip.textContent = text;
-  if (els.statusLine) els.statusLine.textContent = text || "Ready for geometry";
 }
 
 function setBusy(value) {
@@ -641,12 +731,50 @@ function setBusy(value) {
 }
 
 // ---------- previous designs store ----------
-// Durable design history lives in the main process (previous-designs.json);
-// this cache mirrors it so every previous design is always visible and
-// searchable, and nothing is lost to localStorage quota pressure.
+// Projects live in renderer localStorage (cadara.projects.v1): every launch
+// lands on the projects home and each project owns its full list of designs.
+// The durable main-process store is only read once to seed the very first
+// project, so nothing from older builds is lost in the switch.
 let historyItems = [];
 let historyReady = false;
 let historyQuery = "";
+let projects = [];
+let activeProjectId = null;
+let projectsReady = false;
+let renameTargetId = null;
+
+function projectUid() {
+  return `proj-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function readProjectsFromStorage() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(PROJECTS_KEY) || "[]");
+    if (Array.isArray(parsed)) {
+      return parsed.filter((p) => p && p.id && Array.isArray(p.items));
+    }
+  } catch {}
+  return [];
+}
+
+function persistProjects() {
+  try {
+    localStorage.setItem(PROJECTS_KEY, JSON.stringify(projects));
+  } catch (err) {
+    // Quota or serialization trouble must never silently eat designs.
+    console.warn("Cadara: could not save projects to localStorage:", err);
+    addMessage("system", "⚠ Could not save projects to local storage: " + (err?.message || err), { record: false });
+  }
+  renderProjectsHome();
+}
+
+function projectById(id) {
+  return projects.find((p) => p.id === id) || null;
+}
+
+function sortedProjects() {
+  return [...projects].sort((a, b) => (b.updatedAt || b.createdAt || "").localeCompare(a.updatedAt || a.createdAt || ""));
+}
 
 async function loadHistoryStore() {
   // One-time migration: pull legacy renderer-localStorage entries into
@@ -662,38 +790,46 @@ async function loadHistoryStore() {
     await cadara.history.importLegacy(legacy).catch(() => {});
   }
   try { localStorage.removeItem(HISTORY_KEY); } catch {}
-  historyItems = (await cadara.history?.list?.()) || [];
-  if (!Array.isArray(historyItems)) historyItems = [];
+  const seed = (await cadara.history?.list?.()) || [];
+  if (!Array.isArray(seed)) historyItems.length = 0;
+  initProjects(seed);
+}
+
+// Seeds the projects store. First run with existing designs: they all land in
+// a single "My Designs" project so every past design stays reachable.
+function initProjects(seedItems) {
+  projects = readProjectsFromStorage();
+  if (!projects.length && Array.isArray(seedItems) && seedItems.length) {
+    const now = new Date().toISOString();
+    projects = [{
+      id: projectUid(),
+      name: "My Designs",
+      createdAt: now,
+      updatedAt: now,
+      items: seedItems,
+    }];
+    persistProjects();
+  }
+  historyItems = [];
+  projectsReady = true;
   historyReady = true;
-  renderPreviousChats();
+  renderProjectsHome();
 }
 
 function readPreviousChats() {
   return historyItems;
 }
 
-// Writes go through to the durable store: upsert each changed entry by id,
-// and delete entries that vanished from the cache so both stores stay in
-// agreement.
+// Writes land in the active project's design list and persist to localStorage
+// immediately, so the projects home always reflects the latest state.
 function writePreviousChats(items) {
   const next = (items || []).filter((d) => d && d.id);
-  const prevById = new Map(historyItems.map((d) => [d.id, d]));
-  const nextIds = new Set(next.map((d) => d.id));
   historyItems = next;
-  for (const item of next) {
-    const before = prevById.get(item.id);
-    if (!before || JSON.stringify(before) !== JSON.stringify(item)) {
-      const saved = cadara.history?.save?.(item);
-      if (saved && typeof saved.catch === "function") saved.catch(() => {});
-    }
-  }
-  if (cadara.history?.remove) {
-    for (const id of prevById.keys()) {
-      if (!nextIds.has(id)) {
-        const removed = cadara.history.remove(id);
-        if (removed && typeof removed.catch === "function") removed.catch(() => {});
-      }
-    }
+  const project = projectById(activeProjectId);
+  if (project) {
+    project.items = next;
+    project.updatedAt = new Date().toISOString();
+    persistProjects();
   }
 }
 
@@ -866,6 +1002,13 @@ async function openPreviousChat(item, { announce = false } = {}) {
   clearActiveDesignView({ clearTranscript: true });
   activeChatId = item.id || null;
   currentTranscript = Array.isArray(item.transcript) ? item.transcript.slice() : [];
+  lastResultInfo = {
+    summary: item.summary || "",
+    model: item.model || "",
+    provider: item.provider || "",
+    artifacts: item.artifact,
+    savedAt: item.savedAt || "",
+  };
   for (const msg of currentTranscript) addMessage(msg.role || "system", msg.text || "", { record: false });
   if (!currentTranscript.length) {
     addMessage("user", item.prompt || transcriptTitle(item), { record: false });
@@ -880,13 +1023,19 @@ async function openPreviousChat(item, { announce = false } = {}) {
   if (announce) addMessage("system", "Restored your last design session — continue where you left off.");
 }
 
-// Runs once when the user leaves the landing page: reopen the most recent
-// chat so past work is immediately visible after an app restart.
-async function restoreLastSessionOnLaunch() {
-  if (busy || els.chat.children.length) return;
-  const items = readPreviousChats();
-  if (!items.length) return;
-  await openPreviousChat(items[0], { announce: true });
+// Leaves the workbench and returns to the projects home. The current design
+// is saved into the active project first, so nothing is lost.
+function goHome() {
+  if (busy) {
+    cadara.chat.cancel();
+    setBusy(false);
+  }
+  hideDetailsDrawer();
+  saveCurrentChatToHistory();
+  activeClientJobId = null;
+  activeProjectId = null;
+  historyItems = [];
+  showProjectsHome();
 }
 
 function clearActiveDesignView({ clearTranscript = false } = {}) {
@@ -900,6 +1049,8 @@ function clearActiveDesignView({ clearTranscript = false } = {}) {
   activeAgentId = null;
   lastThinkingText = "";
   lastArtifact = null;
+  lastResultInfo = null;
+  hideDetailsDrawer();
   lastPrompt = "";
   lastReferenceImageForPrompt = null;
   activeClientJobId = null;
@@ -920,6 +1071,7 @@ function clearActiveDesignView({ clearTranscript = false } = {}) {
   els.viewerLoading.hidden = true;
   els.viewerEmpty.hidden = false;
   setStatus("");
+  updateExportAvailability();
 }
 
 function addMessage(role, text, { record = true } = {}) {
@@ -975,6 +1127,7 @@ function addThoughtMessage(text) {
 
 function showArtifact(artifact) {
   lastArtifact = artifact;
+  updateExportAvailability();
   els.viewerEmpty.hidden = true;
   els.viewerLoading.hidden = false;
   els.viewerLoadingText.textContent = "Rendering " + artifact.slug + " ...";
@@ -1239,7 +1392,10 @@ async function chooseReferenceImage(file) {
 async function send(prompt, isAutoRetry = false) {
   if (isAutoRetry && !activeClientJobId) return;
   if (!isAutoRetry) autoRetryCount = 0;
-  lastPrompt = prompt;
+  // Attach active tune constraints to the design prompt. On auto-retry the
+  // prompt is already the constrained form (lastPrompt), so we don't append again.
+  const fullPrompt = isAutoRetry ? prompt : prompt + collectTuneConstraints();
+  lastPrompt = fullPrompt;
   const clientJobId = isAutoRetry && activeClientJobId ? activeClientJobId : `job-${Date.now()}-${++runSerial}`;
   activeClientJobId = clientJobId;
   setBusy(true);
@@ -1247,14 +1403,15 @@ async function send(prompt, isAutoRetry = false) {
   const referenceForSend = isAutoRetry ? lastReferenceImageForPrompt : (referenceImage ? { ...referenceImage } : null);
   if (!isAutoRetry) lastReferenceImageForPrompt = referenceForSend;
   if (!isAutoRetry) {
-    addMessage("user", referenceForSend ? `${prompt}\n\nReference image: ${referenceForSend.name}` : prompt);
+    addMessage("user", referenceForSend ? `${fullPrompt}\n\nReference image: ${referenceForSend.name}` : fullPrompt);
   }
+  setTuneLocked(true);
   hideSuggestions();
   setStatus("Starting…");
   const model = els.modelSelect.value;
   const maxRetries = 2;
   try {
-    const res = await cadara.chat.send(prompt, currentProvider(), model, referenceForSend, clientJobId);
+    const res = await cadara.chat.send(fullPrompt, currentProvider(), model, referenceForSend, clientJobId);
     if (clientJobId !== activeClientJobId) return;
     if (!res.ok) {
       addMessage("system", res.canceled ? "Canceled." : "⚠ " + res.error);
@@ -1268,6 +1425,10 @@ async function send(prompt, isAutoRetry = false) {
         markPipelineError();
       }
       return;
+    }
+    if (res.ok && res.result) {
+      lastResultInfo = res.result;
+      if (!els.detailsDrawer.hidden) populateDetailsDrawer();
     }
     if (!doneReceived) {
       doneReceived = true;
@@ -1288,7 +1449,10 @@ async function send(prompt, isAutoRetry = false) {
     els.retryBtn.hidden = false;
     markPipelineError();
   } finally {
-    if (clientJobId === activeClientJobId) setBusy(false);
+    if (clientJobId === activeClientJobId) {
+      setBusy(false);
+      setTuneLocked(false);
+    }
   }
 }
 
@@ -1313,6 +1477,88 @@ els.cancelBtn.addEventListener("click", () => {
   cadara.chat.cancel();
   addMessage("system", "Canceling…");
 });
+
+// -- Tune panel (design constraint sliders) wiring ---------------------------------
+// The tune panel is a set of sliders that constrain the next generation(s). The
+// sliders start out inert ("any"); moving one marks it as "touched", which
+// flips its label to the active value and appends a constraint block to the
+// next design prompt. Reset clears the touched set and restores defaults.
+
+// Default slider values are authored in index.html; read them from the DOM so
+// this stays in sync with what the markup declares.
+const TUNE_DEFAULTS = {};
+els.tuneSliders.forEach((s) => (TUNE_DEFAULTS[s.id] = Number(s.value)));
+const touchedTunes = new Set();
+
+// Reflects slider state into the [data-value-for] label spans (value or "any").
+function updateTuneLabels() {
+  els.tuneSliders.forEach((s) => {
+    const label = document.querySelector(`.tune-value[data-value-for="${s.id}"]`);
+    if (!label) return;
+    label.textContent = touchedTunes.has(s.id) ? formatTuneValue(s.id, s.value) : "any";
+  });
+}
+
+function formatTuneValue(id, raw) {
+  const v = Number(raw);
+  if (id === "tune-size") return `${v} mm`;
+  if (id === "tune-wall") return `${v} mm`;
+  if (id === "tune-round" || id === "tune-detail" || id === "tune-fit") return `${v}%`;
+  return String(v);
+}
+
+// Builds the constraint suffix appended to the design prompt. Empty when no
+// slider has been touched, so a pristine tune panel never alters a prompt.
+function collectTuneConstraints() {
+  if (touchedTunes.size === 0) return "";
+  const rows = [];
+  els.tuneSliders.forEach((s) => {
+    if (touchedTunes.has(s.id)) {
+      const name = {
+        "tune-size": "overall size",
+        "tune-wall": "wall thickness",
+        "tune-round": "corner rounding",
+        "tune-detail": "detail level",
+        "tune-fit": "fit tolerance",
+      }[s.id] || s.id;
+      rows.push(`- ${name}: ${formatTuneValue(s.id, s.value)}`);
+    }
+  });
+  return (
+    "\n\n**Tune the constraints** for this design (apply unless the request says otherwise):\n" +
+    rows.join("\n")
+  );
+}
+
+els.tuneSliders.forEach((s) => {
+  s.addEventListener("input", () => {
+    touchedTunes.add(s.id);
+    updateTuneLabels();
+  });
+});
+
+els.tuneBtn?.addEventListener("click", () => {
+  const isOpen = !els.tunePanel.hidden;
+  els.tunePanel.hidden = isOpen;
+  updateTuneLabels();
+});
+
+els.tuneResetBtn?.addEventListener("click", () => {
+  els.tuneSliders.forEach((s) => {
+    s.value = TUNE_DEFAULTS[s.id];
+    touchedTunes.delete(s.id);
+  });
+  updateTuneLabels();
+});
+
+// Keep the sliders locked while a generation is running (see setBusy).
+function setTuneLocked(locked) {
+  if (!els.tuneSliders.length) return;
+  els.tuneSliders.forEach((s) => (s.disabled = locked));
+  if (els.tuneResetBtn) els.tuneResetBtn.disabled = locked;
+  updateTuneLabels();
+}
+
 
 els.retryBtn.addEventListener("click", () => {
   if (lastPrompt && !busy) {
@@ -1347,15 +1593,15 @@ els.newChatBtn.addEventListener("click", async () => {
 });
 
 els.historyBtn.addEventListener("click", () => {
+  setRailActive("history-btn");
   renderPreviousChats();
   els.historyPopover.hidden = !els.historyPopover.hidden;
 });
 
-els.historyClearBtn.addEventListener("click", async () => {
-  // Wipe the durable store (and any legacy localStorage leftovers).
-  try { await cadara.history?.clear?.(); } catch {}
+els.historyClearBtn.addEventListener("click", () => {
+  // Wipe the active project's designs (and any legacy localStorage leftovers).
   try { localStorage.removeItem(HISTORY_KEY); } catch {}
-  historyItems = [];
+  writePreviousChats([]);
   renderPreviousChats();
 });
 
@@ -1375,24 +1621,9 @@ let lastActiveTab = "panel-keys";
 els.settingsBtn.addEventListener("click", async () => {
   els.modal.hidden = false;
   els.skillsNote.textContent = "";
-  els.aiNote.textContent = "";
   
   await renderProviderKeys();
   await loadSkills();
-  const aiConfig = await cadara.settings.getAiConfig();
-  els.aiTemp.value = aiConfig.temperature ?? 0.1;
-  els.tempVal.textContent = aiConfig.temperature ?? 0.1;
-  els.aiIter.value = aiConfig.maxIterations ?? 8;
-  els.iterVal.textContent = aiConfig.maxIterations ?? 8;
-  els.aiWall.value = aiConfig.wallThickness ?? 3.0;
-  els.wallVal.textContent = aiConfig.wallThickness ?? 3.0;
-  els.aiTol.value = aiConfig.defaultTolerance ?? 1.0;
-  els.tolVal.textContent = aiConfig.defaultTolerance ?? 1.0;
-  els.aiFillet.value = aiConfig.filletStrategy ?? "moderate";
-  els.aiPreprompt.value = aiConfig.prePromptInstruction ?? "";
-  
-  const activeRadio = Array.from(els.aiConfigForm.elements["qualityMode"]).find(r => r.value === aiConfig.qualityMode);
-  if (activeRadio) activeRadio.checked = true;
 
   // Restore last active tab
   els.settingsNavBtns.forEach(t => t.classList.remove("active"));
@@ -1406,6 +1637,7 @@ els.settingsBtn.addEventListener("click", async () => {
       target.classList.add("active");
       target.hidden = false;
     }
+    if (tabToActivate.dataset.target === "panel-local") renderLocalPanel();
   }
 });
 
@@ -1422,6 +1654,7 @@ els.settingsNavBtns.forEach(tab => {
       target.classList.add("active");
       target.hidden = false;
     }
+    if (tab.dataset.target === "panel-local") renderLocalPanel();
   });
 });
 
@@ -1648,30 +1881,226 @@ els.skillForm.addEventListener("submit", async (e) => {
   }
 });
 
-// AI Config
-els.aiTemp.addEventListener("input", () => els.tempVal.textContent = els.aiTemp.value);
-els.aiIter.addEventListener("input", () => els.iterVal.textContent = els.aiIter.value);
-els.aiWall.addEventListener("input", () => els.wallVal.textContent = els.aiWall.value);
-els.aiTol.addEventListener("input", () => els.tolVal.textContent = els.aiTol.value);
+// -----------------------------------------------------------------------------
+// Local Models (Ollama)
+// Download curated CAD-capable models once, then run fully offline: pick
+// "Ollama (Local)" in the AI dropdown and only downloaded models appear.
+// -----------------------------------------------------------------------------
 
-els.aiConfigForm.addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const qualityMode = Array.from(els.aiConfigForm.elements["qualityMode"]).find(r => r.checked)?.value || "balanced";
-  const temperature = parseFloat(els.aiTemp.value);
-  const maxIterations = parseInt(els.aiIter.value, 10);
-  const wallThickness = parseFloat(els.aiWall.value);
-  const defaultTolerance = parseFloat(els.aiTol.value);
-  const filletStrategy = els.aiFillet.value;
-  const prePromptInstruction = els.aiPreprompt.value;
-  
-  const res = await cadara.settings.setAiConfig({ 
-    qualityMode, temperature, maxIterations,
-    wallThickness, defaultTolerance, filletStrategy, prePromptInstruction
-  });
-  if (res.ok) {
-    els.aiNote.textContent = "Config saved.";
-    els.aiNote.className = "settings-note ok";
+const OLLAMA_RECOMMENDED = [
+  {
+    model: "qwen2.5-coder:7b",
+    label: "Local Fast — Qwen2.5-Coder 7B",
+    size: "≈4.7 GB download",
+    desc: "Quick local CAD for simple parts, plates, holes, and brackets. Needs ~8 GB RAM.",
+  },
+  {
+    model: "qwen2.5-coder:14b",
+    label: "Local Balanced — Qwen2.5-Coder 14B",
+    size: "≈9 GB download",
+    desc: "Noticeably better geometry code and fewer repair loops. Needs ~16 GB RAM.",
+  },
+  {
+    model: "qwen3-coder:30b",
+    label: "Local Max — Qwen3-Coder 30B",
+    size: "≈19 GB download",
+    desc: "Best local CAD quality (MoE — runs at 8B-like speed). Needs ~24-32 GB RAM.",
+  },
+];
+
+const ollamaPulls = new Map(); // model -> { percent, status, done, error }
+let ollamaPanelLoading = false;
+let ollamaRenderQueued = false;
+
+function ollamaBaseName(name) {
+  return String(name || "").replace(/:latest$/i, "");
+}
+
+function formatModelSize(bytes) {
+  const n = Number(bytes) || 0;
+  if (!n) return "";
+  const gb = n / (1024 * 1024 * 1024);
+  if (gb >= 1) return gb.toFixed(1).replace(/\.0$/, "") + " GB";
+  return Math.round(n / (1024 * 1024)) + " MB";
+}
+
+function setLocalNote(text, isError = false) {
+  els.ollamaLocalNote.hidden = !text;
+  els.ollamaLocalNote.textContent = text || "";
+  els.ollamaLocalNote.className = "settings-note" + (text && isError ? " err" : "");
+}
+
+function renderOllamaStatus(status) {
+  const up = Boolean(status?.reachable);
+  els.ollamaStatusDot.classList.toggle("up", up);
+  els.ollamaStatusDot.classList.toggle("down", !up);
+  els.ollamaStatusText.textContent = up
+    ? `Ollama is running (${String(status.url || "").replace(/^https?:\/\//, "")})`
+    : "Ollama not detected on this machine";
+  els.ollamaInstallLink.hidden = up;
+  return { up, models: Array.isArray(status?.models) ? status.models : [] };
+}
+
+function ollamaRowHtml({ title, subtitle, desc, sideHtml, extraHtml = "" }) {
+  return `
+    <div class="ollama-model-info">
+      <div class="ollama-model-head">${escapeHtml(title)}</div>
+      ${subtitle ? `<div class="ollama-model-sub">${escapeHtml(subtitle)}</div>` : ""}
+      ${desc ? `<div class="ollama-model-desc">${escapeHtml(desc)}</div>` : ""}
+      ${extraHtml}
+    </div>
+    <div class="ollama-model-side">${sideHtml}</div>`;
+}
+
+async function renderLocalPanel() {
+  if (ollamaPanelLoading) return;
+  ollamaPanelLoading = true;
+  els.ollamaStatusText.textContent = "Checking for Ollama…";
+  els.ollamaRecommended.innerHTML = "";
+  els.ollamaInstalled.innerHTML = "";
+  let status = null;
+  try {
+    status = await cadara.ollama.status();
+  } catch {
+    status = { reachable: false, models: [] };
   }
+  const { up, models } = renderOllamaStatus(status);
+  const installedNames = new Set(models.map((m) => ollamaBaseName(m.name)));
+
+  // Recommended presets with one-click downloads.
+  for (const preset of OLLAMA_RECOMMENDED) {
+    const installed = up && installedNames.has(ollamaBaseName(preset.model));
+    const pull = ollamaPulls.get(preset.model);
+    const running = Boolean(pull && !pull.done);
+    const err = pull?.done && pull?.error;
+    let extraHtml = "";
+    let sideHtml;
+    if (running) {
+      const pct = pull.percent;
+      extraHtml = `
+        <div class="ollama-progress">
+          <div class="ollama-progress-bar"><div class="ollama-progress-fill" style="transform: scaleX(${Math.max(0.02, (pct ?? 0) / 100)})"></div></div>
+          <span class="ollama-progress-text">${pct != null ? pct + "%" : escapeHtml(pull.status || "Starting…")}</span>
+        </div>`;
+      sideHtml = `<span class="ollama-installed-chip downloading">Downloading…</span>`;
+    } else if (err) {
+      extraHtml = `<div class="settings-note err">${escapeHtml(err)}</div>`;
+      sideHtml = `<button type="button" class="ollama-download-btn" data-model="${escapeHtml(preset.model)}" ${up ? "" : "disabled"}>Retry download</button>`;
+    } else if (installed) {
+      sideHtml = `<span class="ollama-installed-chip">Installed</span>`;
+    } else {
+      sideHtml = `<button type="button" class="ollama-download-btn" data-model="${escapeHtml(preset.model)}" ${up ? "" : "disabled"}>Download</button>`;
+    }
+    const row = document.createElement("div");
+    row.className = "ollama-model-row";
+    row.innerHTML = ollamaRowHtml({
+      title: preset.label,
+      subtitle: preset.size,
+      desc: preset.desc,
+      sideHtml,
+      extraHtml,
+    });
+    els.ollamaRecommended.appendChild(row);
+  }
+
+  wireOllamaRecommendedButtons();
+  renderOllamaInstalledList(up, models);
+  ollamaPanelLoading = false;
+}
+
+function wireOllamaRecommendedButtons() {
+  els.ollamaRecommended.querySelectorAll(".ollama-download-btn").forEach((btn) => {
+    btn.addEventListener("click", async () => {
+      const model = btn.dataset.model;
+      ollamaPulls.set(model, { percent: null, status: "Starting…", done: false });
+      setLocalNote("");
+      const res = await cadara.ollama.pull(model);
+      if (!res?.ok) {
+        ollamaPulls.delete(model);
+        setLocalNote(res?.error || "Could not start the download.", true);
+        renderLocalPanel();
+      } else {
+        renderLocalPanel();
+      }
+    });
+  });
+}
+
+function renderOllamaInstalledList(up, models) {
+  // Everything downloaded on this machine — these are exactly the models the
+  // AI dropdown offers when "Ollama (Local)" is selected.
+  if (!up) {
+    els.ollamaInstalled.innerHTML = `<div class="ollama-empty">Start Ollama and refresh — downloaded models will be listed here and appear in the AI dropdown.</div>`;
+    return;
+  }
+  if (models.length === 0) {
+    els.ollamaInstalled.innerHTML = `<div class="ollama-empty">No models downloaded yet. Grab one of the recommended models above.</div>`;
+    return;
+  }
+  els.ollamaInstalled.innerHTML = "";
+  for (const m of models) {
+    const row = document.createElement("div");
+    row.className = "ollama-model-row";
+    const size = formatModelSize(m.size);
+    row.innerHTML = ollamaRowHtml({
+      title: ollamaBaseName(m.name),
+      subtitle: size ? `${size} on disk` : "",
+      desc: "",
+      sideHtml: `<button type="button" class="ollama-use-btn" data-model="${escapeHtml(m.name)}">Use</button>`,
+    });
+    els.ollamaInstalled.appendChild(row);
+  }
+  els.ollamaInstalled.querySelectorAll(".ollama-use-btn").forEach((btn) => {
+    btn.addEventListener("click", () => useOllamaModel(btn.dataset.model));
+  });
+}
+
+// Switch the composer to Ollama with this exact downloaded model selected.
+function useOllamaModel(modelName) {
+  els.providerSelect.value = "ollama";
+  populateProviderControls("ollama");
+  if (![...els.modelSelect.options].some((o) => o.value === modelName)) {
+    const opt = document.createElement("option");
+    opt.value = modelName;
+    opt.textContent = compactModelLabel("ollama", modelName);
+    els.modelSelect.appendChild(opt);
+  }
+  els.modelSelect.value = modelName;
+  selectedModelByProvider.ollama = modelName;
+  updateReferenceControls();
+  els.modal.hidden = true;
+  els.prompt.focus();
+  addMessage("system", `Local model ready: ${modelName} (Ollama). Design runs stay on this machine.`, { record: false });
+}
+
+function handleOllamaPullProgress(evt) {
+  const pull = ollamaPulls.get(evt.model);
+  if (!pull) return;
+  pull.percent = evt.percent ?? pull.percent;
+  pull.status = evt.status || pull.status;
+  if (evt.done) {
+    pull.done = true;
+    pull.error = evt.error || null;
+    if (!evt.error) {
+      ollamaPulls.delete(evt.model);
+      setLocalNote(`${ollamaBaseName(evt.model)} downloaded — pick it in the AI dropdown (Ollama (Local)).`);
+      // Refresh the composer catalog so the new model shows up immediately.
+      checkGlobalKeyStatus();
+    }
+  }
+  // Progress events arrive many times a second; throttle panel re-renders.
+  if (ollamaRenderQueued) return;
+  ollamaRenderQueued = true;
+  setTimeout(() => {
+    ollamaRenderQueued = false;
+    renderLocalPanel();
+  }, 400);
+}
+
+cadara.ollama?.onPullProgress?.(handleOllamaPullProgress);
+els.ollamaRefreshBtn?.addEventListener("click", () => {
+  setLocalNote("");
+  renderLocalPanel();
 });
 
 els.settingsClose.addEventListener("click", () => (els.modal.hidden = true));
@@ -1713,8 +2142,26 @@ function hideSuggestions() {
   els.suggestions.hidden = true;
 }
 
+// Disables/enables the toolbar Export button and keeps its tooltip honest
+// based on whether a part is currently loaded. Called whenever artifact state
+// changes, so the button never silently does nothing.
+function updateExportAvailability() {
+  const available = Boolean(lastArtifact && lastArtifact.slug);
+  if (els.exportBtn) {
+    els.exportBtn.disabled = !available;
+    els.exportBtn.title = available ? "Export the current model" : "Generate a design first, then export";
+  }
+}
+
 els.exportBtn?.addEventListener("click", () => {
-  if (!lastArtifact) return;
+  if (!lastArtifact || !lastArtifact.slug) {
+    if (els.progressStatus) {
+      els.exportPopup.hidden = false;
+      els.exportProgress.hidden = true;
+      els.progressStatus.textContent = "No part is loaded to export. Generate a design first.";
+    }
+    return;
+  }
   els.exportPopup.hidden = false;
   els.exportProgress.hidden = true;
   els.progressBarFill.style.transform = "scaleX(0)";
@@ -1726,7 +2173,14 @@ els.exportClose?.addEventListener("click", () => {
 
 els.formatBtns.forEach((btn) => {
   btn.addEventListener("click", async () => {
-    if (!lastArtifact) return;
+    if (!lastArtifact || !lastArtifact.slug) {
+      if (els.progressStatus) {
+        els.exportPopup.hidden = false;
+        els.exportProgress.hidden = true;
+        els.progressStatus.textContent = "No part is loaded to export. Generate a design first.";
+      }
+      return;
+    }
     const format = btn.dataset.fmt;
     const relPath = lastArtifact.slug + "/part.step"; // always convert from step
     
@@ -1734,6 +2188,20 @@ els.formatBtns.forEach((btn) => {
     els.exportProgress.hidden = false;
     els.progressBarFill.style.transform = "scaleX(0.2)";
     els.progressStatus.textContent = "Initializing...";
+    
+    // PNG is a render of the exact view the user sees, captured in-renderer.
+    // Send the high-res data URL through so the main process can write it
+    // directly (the CLI snapshot is only a fallback).
+    let dataUrl = null;
+    if (format === "png" && viewer?.captureHighRes) {
+      try {
+        els.progressStatus.textContent = "Capturing view...";
+        dataUrl = await viewer.captureHighRes({ width: 2560 });
+      } catch (err) {
+        els.progressStatus.textContent = "PNG capture failed: " + (err?.message || err);
+        return;
+      }
+    }
     
     // Setup listener for progress
     let unsub = null;
@@ -1751,6 +2219,7 @@ els.formatBtns.forEach((btn) => {
         relPath,
         format,
         name: lastArtifact.slug + "." + format,
+        dataUrl,
       });
 
       if (res.ok) {
@@ -1768,21 +2237,426 @@ els.formatBtns.forEach((btn) => {
     }
   });
 });
+// -----------------------------------------------------------------------------
+// Part Details drawer
+// Shows the design summary, spec features/assumptions, geometry facts and
+// build metadata for the currently displayed artifact.
+// -----------------------------------------------------------------------------
+
+function fmtNumber(n) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return String(n);
+  return String(Math.round(v * 100) / 100).replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, "");
+}
+
+function populateDetailsDrawer() {
+  if (!lastArtifact) return;
+  const info = lastResultInfo || {};
+  const artifact = lastArtifact;
+
+  // Summary
+  const summary = info.summary || "";
+  els.detailsSummary.textContent = summary || "No summary available for this part.";
+
+  // Features from the design spec
+  const features = Array.isArray(info.spec?.features) ? info.spec.features : [];
+  if (features.length) {
+    els.detailsFeatures.innerHTML = "";
+    for (const f of features.slice(0, 24)) {
+      const li = document.createElement("li");
+      const name = f?.name || "feature";
+      const desc = typeof f?.description === "string" && f.description ? " — " + f.description : "";
+      li.textContent = name + desc;
+      els.detailsFeatures.appendChild(li);
+    }
+    els.detailsFeaturesSec.hidden = false;
+  } else {
+    els.detailsFeaturesSec.hidden = true;
+  }
+
+  // Assumptions from the design spec
+  const assumptions = Array.isArray(info.spec?.assumptions) ? info.spec.assumptions : [];
+  if (assumptions.length) {
+    els.detailsAssumptions.innerHTML = "";
+    for (const a of assumptions.slice(0, 24)) {
+      const li = document.createElement("li");
+      li.textContent = a;
+      els.detailsAssumptions.appendChild(li);
+    }
+    els.detailsAssumptionsSec.hidden = false;
+  } else {
+    els.detailsAssumptionsSec.hidden = true;
+  }
+
+  // Geometry facts
+  const rows = detailsRowsFromFacts(artifact.facts);
+  if (rows.length) {
+    fillDetailsDl(els.detailsGeometry, rows);
+    els.detailsGeometrySec.hidden = false;
+  } else {
+    els.detailsGeometrySec.hidden = true;
+  }
+
+  // Build meta
+  const metaRows = [];
+  const provider = info.provider || currentProvider();
+  const providerLabel = provider ? PROVIDER_LABELS[provider] || provider : "";
+  if (providerLabel && providerLabel !== "ollama") metaRows.push(["provider", providerLabel]);
+  const model = info.model || els.modelSelect?.value || "";
+  if (model) metaRows.push(["model", String(model).split(" — ")[0]]);
+  if (artifact.displayName || artifact.slug) metaRows.push(["part", artifact.displayName || artifact.slug]);
+  if (info.savedAt) {
+    try {
+      metaRows.push(["saved", new Date(info.savedAt).toLocaleString()]);
+    } catch { /* ignore */ }
+  }
+  if (metaRows.length) {
+    fillDetailsDl(els.detailsMeta, metaRows);
+    els.detailsMetaSec.hidden = false;
+  } else {
+    els.detailsMetaSec.hidden = true;
+  }
+}
+
+function toggleDetailsDrawer() {
+  if (!lastArtifact) return;
+  if (els.detailsDrawer.hidden) {
+    populateDetailsDrawer();
+    els.detailsDrawer.hidden = false;
+    els.detailsBtn.classList.add("active");
+  } else {
+    hideDetailsDrawer();
+  }
+}
+
+els.detailsBtn?.addEventListener("click", toggleDetailsDrawer);
+els.detailsClose?.addEventListener("click", hideDetailsDrawer);
+
+function hideDetailsDrawer() {
+  if (els.detailsDrawer) els.detailsDrawer.hidden = true;
+  if (els.detailsBtn) els.detailsBtn.classList.remove("active");
+}
+
+function detailsRowsFromFacts(facts) {
+  if (!facts) return [];
+  const rows = [];
+  const size = facts.entryFacts?.size;
+  if (Array.isArray(size)) {
+    rows.push(["overall size", size.map(fmtNumber).join(" × ") + " mm"]);
+  }
+  if (facts.volume != null) rows.push(["volume", fmtNumber(facts.volume) + " mm³"]);
+  if (facts.faceCount != null) rows.push(["faces", String(facts.faceCount)]);
+  if (facts.edgeCount != null) rows.push(["edges", String(facts.edgeCount)]);
+  if (facts.shapeCount != null) rows.push(["shapes", String(facts.shapeCount)]);
+  if (facts.occurrenceCount != null) rows.push(["occurrences", String(facts.occurrenceCount)]);
+  if (facts.bounds && Array.isArray(facts.bounds.min) && Array.isArray(facts.bounds.max)) {
+    const [mn, mx] = [facts.bounds.min, facts.bounds.max];
+    rows.push([
+      "bounds (mm)",
+      `[${mn.map(fmtNumber).join(", ")}] → [${mx.map(fmtNumber).join(", ")}]`,
+    ]);
+  }
+  return rows;
+}
+
+function fillDetailsDl(dl, rows) {
+  dl.innerHTML = "";
+  for (const [k, v] of rows) {
+    const dt = document.createElement("dt");
+    dt.textContent = k;
+    const dd = document.createElement("dd");
+    dd.textContent = v;
+    dl.appendChild(dt);
+    dl.appendChild(dd);
+  }
+}
 
 // -----------------------------------------------------------------------------
-// Landing Page Logic
+// Projects Home Logic
+// Every launch lands on the projects page. Left-click opens a project,
+// right-click offers Open / Rename / Export / Delete. Designs created inside
+// a project are saved back into it through writePreviousChats().
 // -----------------------------------------------------------------------------
 
-els.startDesigningBtn?.addEventListener("click", () => {
+function setRailActive(activeId) {
+  document.querySelectorAll(".rail .rail-btn").forEach((btn) => {
+    btn.classList.toggle("active", btn.id === activeId);
+  });
+}
+
+function showProjectsHome() {
+  renderProjectsHome();
+  setRailActive("home-btn");
+  els.landingPage.style.display = "";
+  requestAnimationFrame(() => els.landingPage.classList.remove("hidden"));
+}
+
+function hideProjectsHome() {
   els.landingPage.classList.add("hidden");
-
-  // Wait for transition to complete before removing from DOM flow
+  // Wait for the fade-out transition before removing from DOM flow.
   setTimeout(() => {
-    els.landingPage.style.display = "none";
-    els.prompt.focus();
+    if (els.landingPage.classList.contains("hidden")) {
+      els.landingPage.style.display = "none";
+    }
   }, 800);
+}
 
-  restoreLastSessionOnLaunch();
+function projectMetaLine(project) {
+  const count = (project.items || []).length;
+  const designs = `${count} design${count === 1 ? "" : "s"}`;
+  const stamp = project.updatedAt || project.createdAt;
+  const when = stamp
+    ? new Date(stamp).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" })
+    : "";
+  return when ? `${designs} · ${when}` : designs;
+}
+
+function renderProjectsHome() {
+  if (!els.projectsGrid) return;
+  updateResumeButton();
+  els.projectsGrid.innerHTML = "";
+
+  const newCard = document.createElement("button");
+  newCard.type = "button";
+  newCard.className = "project-card new-project-card";
+  newCard.innerHTML = `
+    <span class="new-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+    </span>
+    <span class="project-name">New Project</span>`;
+  newCard.addEventListener("click", () => createProject());
+  els.projectsGrid.appendChild(newCard);
+
+  for (const project of sortedProjects()) {
+    const card = document.createElement("button");
+    card.type = "button";
+    card.className = "project-card";
+    card.dataset.projectId = project.id;
+
+    const thumb = document.createElement("div");
+    thumb.className = "project-thumb";
+    thumb.innerHTML = `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4 7.5v9L12 21l8-4.5v-9L12 3Z"/><path d="M4 7.5 12 12l8-4.5"/><path d="M12 12v9"/></svg>`;
+
+    const info = document.createElement("div");
+    info.className = "project-info";
+    const name = document.createElement("div");
+    name.className = "project-name";
+    name.textContent = project.name;
+    const meta = document.createElement("div");
+    meta.className = "project-meta";
+    meta.textContent = projectMetaLine(project);
+    info.appendChild(name);
+    info.appendChild(meta);
+
+    card.appendChild(thumb);
+    card.appendChild(info);
+    card.title = `${project.name} — ${projectMetaLine(project)}`;
+    card.addEventListener("click", () => openProject(project.id));
+    card.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      showProjectContextMenu(e.clientX, e.clientY, project.id);
+    });
+    els.projectsGrid.appendChild(card);
+  }
+}
+
+function lastWorkedProject() {
+  const sorted = sortedProjects();
+  return sorted.length ? sorted[0] : null;
+}
+
+function resumeLastProject() {
+  const last = lastWorkedProject();
+  if (last) openProject(last.id);
+  else createProject();
+}
+
+function fitProjectName(name, max = 22) {
+  const s = String(name || "");
+  if (s.length <= max) return s;
+  return s.slice(0, Math.max(1, max - 5)) + "…" + s.slice(-2);
+}
+
+function updateResumeButton() {
+  if (!els.projectsResumeBtn || !els.projectsResumeLabel) return;
+  const last = lastWorkedProject();
+  if (last) {
+    const count = (last.items || []).length;
+    els.projectsResumeLabel.textContent = "Resume " + fitProjectName(last.name);
+    els.projectsResumeBtn.title =
+      `Continue “${last.name}” — ${count} design${count === 1 ? "" : "s"}, last edited ` +
+      (last.updatedAt ? new Date(last.updatedAt).toLocaleString() : "recently");
+    els.projectsResumeBtn.disabled = false;
+  } else {
+    els.projectsResumeLabel.textContent = "New Project";
+    els.projectsResumeBtn.title = "No projects yet — create your first project";
+    els.projectsResumeBtn.disabled = false;
+  }
+}
+
+function createProject() {
+  const existing = new Set(projects.map((p) => p.name));
+  let name = "Untitled Project";
+  for (let n = 2; existing.has(name); n++) name = `Untitled Project ${n}`;
+  const now = new Date().toISOString();
+  const project = { id: projectUid(), name, createdAt: now, updatedAt: now, items: [] };
+  projects.push(project);
+  activeProjectId = project.id;
+  persistProjects();
+  openProject(project.id);
+}
+
+async function openProject(id) {
+  const project = projectById(id);
+  if (!project) return;
+  activeProjectId = id;
+  // Mark this project as the most-recently worked-on so the home screen's
+  // “Resume last project” button lands right back here next time.
+  project.updatedAt = new Date().toISOString();
+  persistProjects();
+  hideProjectsHome();
+  hideProjectContextMenu();
+  historyItems = project.items || [];
+  historyQuery = "";
+  if (els.historySearch) els.historySearch.value = "";
+  renderPreviousChats();
+  const items = readPreviousChats();
+  if (items.length) {
+    await openPreviousChat(items[0], { announce: true });
+  } else {
+    clearActiveDesignView({ clearTranscript: true });
+    if (hasKey) showSuggestions();
+    els.prompt.focus();
+  }
+}
+
+function openRenameModal(id) {
+  const project = projectById(id);
+  if (!project) return;
+  renameTargetId = id;
+  els.projectRenameInput.value = project.name;
+  els.projectRenameModal.hidden = false;
+  els.projectRenameInput.focus();
+  els.projectRenameInput.select();
+}
+
+function closeRenameModal() {
+  els.projectRenameModal.hidden = true;
+  renameTargetId = null;
+}
+
+function commitRename() {
+  const project = projectById(renameTargetId);
+  const name = els.projectRenameInput.value.trim();
+  closeRenameModal();
+  if (!project || !name) return;
+  project.name = name;
+  project.updatedAt = new Date().toISOString();
+  persistProjects();
+}
+
+function deleteProject(id) {
+  const project = projectById(id);
+  if (!project) return;
+  const count = (project.items || []).length;
+  const ok = window.confirm(
+    `Delete “${project.name}”?` + (count ? ` ${count} design${count === 1 ? "" : "s"} inside will be removed too.` : "")
+  );
+  if (!ok) return;
+  projects = projects.filter((p) => p.id !== id);
+  if (activeProjectId === id) activeProjectId = null;
+  persistProjects();
+}
+
+// --- right-click context menu (created once, reused for every card) ---------
+
+const contextMenu = document.createElement("div");
+contextMenu.id = "project-context-menu";
+contextMenu.className = "context-menu";
+contextMenu.hidden = true;
+
+const MENU_ITEMS = [
+  {
+    label: "Open",
+    icon: `<svg viewBox="0 0 24 24"><path d="M4 19V5h6l2 2h8v12Z"/></svg>`,
+    action: (id) => openProject(id),
+  },
+  {
+    label: "Rename",
+    icon: `<svg viewBox="0 0 24 24"><path d="M4 20h4L19 9l-4-4L4 16v4Z"/><path d="M13.5 6.5l4 4"/></svg>`,
+    action: (id) => openRenameModal(id),
+  },
+  {
+    label: "Delete",
+    danger: true,
+    icon: `<svg viewBox="0 0 24 24"><path d="M5 7h14"/><path d="M9 7V4h6v3"/><path d="M7 7l1 13h8l1-13"/></svg>`,
+    action: (id) => deleteProject(id),
+  },
+];
+
+for (const [index, item] of MENU_ITEMS.entries()) {
+  if (item.danger && index > 0 && !MENU_ITEMS[index - 1].danger) {
+    const sep = document.createElement("div");
+    sep.className = "context-menu-sep";
+    contextMenu.appendChild(sep);
+  }
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "context-menu-item" + (item.danger ? " danger" : "");
+  btn.innerHTML = `${item.icon}<span>${item.label}</span>`;
+  btn.addEventListener("click", () => {
+    const id = contextMenu.dataset.projectId;
+    hideProjectContextMenu();
+    if (id) item.action(id);
+  });
+  contextMenu.appendChild(btn);
+}
+document.body.appendChild(contextMenu);
+
+function showProjectContextMenu(x, y, projectId) {
+  contextMenu.dataset.projectId = projectId;
+  contextMenu.hidden = false;
+  const rect = contextMenu.getBoundingClientRect();
+  const maxX = window.innerWidth - rect.width - 8;
+  const maxY = window.innerHeight - rect.height - 8;
+  contextMenu.style.left = `${Math.max(8, Math.min(x, maxX))}px`;
+  contextMenu.style.top = `${Math.max(8, Math.min(y, maxY))}px`;
+}
+
+function hideProjectContextMenu() {
+  contextMenu.hidden = true;
+}
+
+document.addEventListener("click", (e) => {
+  if (!contextMenu.hidden && !contextMenu.contains(e.target)) hideProjectContextMenu();
 });
+document.addEventListener("contextmenu", (e) => {
+  if (!contextMenu.hidden && !contextMenu.contains(e.target) && !e.target.closest(".project-card")) {
+    hideProjectContextMenu();
+  }
+});
+window.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") {
+    hideProjectContextMenu();
+    hideDetailsDrawer();
+    if (!els.exportPopup.hidden) els.exportPopup.hidden = true;
+    if (!els.projectRenameModal.hidden) closeRenameModal();
+  }
+});
+
+els.projectRenameSave.addEventListener("click", commitRename);
+els.projectRenameCancel.addEventListener("click", closeRenameModal);
+els.projectRenameModal.addEventListener("click", (e) => {
+  if (e.target === els.projectRenameModal) closeRenameModal();
+});
+els.projectRenameInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") {
+    e.preventDefault();
+    commitRename();
+  }
+});
+
+els.projectsResumeBtn.addEventListener("click", resumeLastProject);
+els.homeBtn.addEventListener("click", () => goHome());
 
 init();

@@ -1,13 +1,14 @@
 # Cadara Design System
 
-Cadara uses a dark CAD instrument cockpit visual world.
+Cadara uses a warm dark CAD instrument cockpit visual world.
 
 ## Core World
 
-- Absolute black workspace with a narrow icon rail and a graphite command pane.
+- Near-black workspace with a narrow icon rail and warm-dark command pane, recolored from the original cold graphite to a heated dark palette.
+- The instrument cockpit is owned by copper (#ff7a3d) as the active signal and mint (#5eead4) for success cues; red is reserved for failure.
 - One primary surface: the CAD canvas. Everything else behaves like instrumentation around it.
-- Hairline dividers, low-elevation graphite popovers, compact controls, and measured type.
-- The main signal color is green for active/successful agent work; red is reserved for failure.
+- Hairline dividers, low-elevation warm-dark popovers, compact controls, and measured type.
+- Display type is Space Grotesk; body is Inter; code, spec data, status, and measurement readouts use IBM Plex Mono. All fonts are bundled locally under `renderer/assets/fonts/` (no runtime network fetch).
 - The UI avoids broad purple gradients, stacked card dashboards, heavy top bars, and chat-app chrome.
 
 ## Layout
@@ -20,7 +21,7 @@ Cadara uses a dark CAD instrument cockpit visual world.
 ## Components
 
 - Rail buttons are icon-only, square, and quiet until hover/focus.
-- Settings is a centered graphite modal with provider key cards in a two-column grid.
+- Settings is a centered warm-dark modal with provider key cards in a two-column grid.
 - Agent pipeline is an instrument readout: compact header, six thin progress bars, and dense step rows.
 - Empty canvas uses a single centered icon block with short, direct copy.
 
@@ -33,6 +34,7 @@ Cadara uses a dark CAD instrument cockpit visual world.
 
 ## Verification Notes
 
-- Browser preview loaded `cadara/renderer/index.html` with no renderer errors.
+- Browser preview loaded `cadara/renderer/index.html` with no renderer errors, over `http://localhost` and `file://` (fonts reported `document.fonts.status === 'loaded'` at both desktop and mobile viewports).
 - Desktop and mobile screenshots were saved under `.impeccable/review/`.
+- Fonts load from the bundled `renderer/assets/fonts/*.woff2` under the current strict CSP (`default-src 'self'`) without a `font-src` change, because they are served from the same origin.
 - Electron launch still aborts with `SIGABRT` in the current sandbox before app code runs.

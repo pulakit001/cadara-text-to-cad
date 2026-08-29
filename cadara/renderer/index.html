@@ -8,31 +8,46 @@
   <link rel="stylesheet" href="style.css" />
 </head>
 <body>
-  <!--
-  THESIS: Cadara is a CAD instrument cockpit, not a chat dashboard; it refuses the old stacked cards and top-bar chrome.
-  OWN-WORLD: absolute black rail, graphite panels, hairline dividers, measured type, compact instrument controls, one green run signal.
-  STORY: the user specifies a part, watches the agent convert intent into geometry, then inspects and exports the part.
-  FIRST VIEWPORT: left icon rail, narrow command column with title/pipeline/chat, bottom floating composer, right full-height CAD canvas.
-  FORM: assigned grounded direction 4; seed 70a80838; code-led build from screenshot-inspired operating console.
-  FINISH: unreviewed and undocumented is unfinished; this build ends with the finish review, the verdict, and DESIGN.md
-  -->
+  <!-- Flash / splash screen shown briefly on launch before the home page -->
+  <div id="flash-screen" class="flash-screen" aria-hidden="true">
+    <img class="flash-logo" src="assets/cadara-icon.png" alt="Cadara" />
+    <div class="flash-wordmark">Cadara</div>
+    <div class="flash-credit">built by the team at Snippetz Labs</div>
+  </div>
 
-  <!-- Landing Page -->
-  <div id="landing-page" class="landing-page">
+  <!--
+  LANDING / PROJECTS HOME: every launch lands here on the classic landing
+  page, now carrying the project grid. Left-click opens a project,
+  right-click for Open / Rename / Delete.
+  -->
+  <div id="landing-page" class="landing-page projects-home">
     <div class="landing-background"></div>
+    <div class="cad-grid" aria-hidden="true"></div>
     <div class="landing-content">
       <div class="landing-hero">
-        <h1 class="landing-title">
-          <span class="welcome-text">Welcome to</span>
-          <img class="landing-logo" src="./assets/cadara-logo-light.png" alt="Cadara" />
-        </h1>
+        <h1 class="landing-title">Design in words</h1>
+        <p class="landing-sub">Describe a part in plain words. Cadara drafts it in three dimensions — open a project, or start a fresh build.</p>
       </div>
-      <button id="start-designing-btn" class="landing-btn">Start designing</button>
-      <div class="landing-maker" title="Built by the maker of Snippetz Labs">
-        Built by the team at Snippetz Labs
+      <div id="projects-grid" class="projects-grid" aria-label="All projects"></div>
+    </div>
+    <div class="projects-footer">
+      <button id="projects-resume-btn" class="projects-footer-btn" type="button" title="Continue the project you last worked on">
+        <svg class="resume-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 4.5v7h7"/><path d="M6 11.5A7 7 0 1 0 9.1 6L6 4.5"/></svg>
+        <span id="projects-resume-label">Resume last project</span>
+      </button>
+    </div>
+  </div>
+
+  <!-- Rename project modal -->
+  <div id="project-rename-modal" class="modal" hidden>
+    <div class="modal-card project-rename-card" role="dialog" aria-modal="true" aria-labelledby="project-rename-title">
+      <h3 id="project-rename-title">Rename project</h3>
+      <input id="project-rename-input" class="project-rename-input" type="text" maxlength="60" autocomplete="off" spellcheck="false" />
+      <div class="modal-actions">
+        <button id="project-rename-cancel" class="text-btn" type="button">Cancel</button>
+        <button id="project-rename-save" class="save-btn" type="button">Rename</button>
       </div>
     </div>
-    <div class="landing-footer">Design in words</div>
   </div>
 
   <!-- Onboarding Tour -->
@@ -53,6 +68,9 @@
   <div class="workbench">
     <aside class="rail" aria-label="Workspace controls">
       <div class="rail-top">
+        <button id="home-btn" class="rail-btn active" type="button" title="All projects" aria-label="Back to projects home">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 11 12 4l8 7"/><path d="M6.5 9.5V19h11V9.5"/><path d="M10 19v-5h4v5"/></svg>
+        </button>
         <button id="new-chat-btn" class="rail-btn" type="button" title="New design session" aria-label="New design session">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
         </button>
@@ -75,7 +93,6 @@
         <header class="pane-head">
           <div>
             <h1>Design a part</h1>
-            <p id="status-line">Ready for geometry</p>
           </div>
           <span id="iter-chip" class="chip" hidden></span>
         </header>
@@ -174,6 +191,7 @@
                   <option value="openai">OpenAI</option>
                   <option value="claude">Claude</option>
                   <option value="openrouter">OpenRouter</option>
+                  <option value="ollama">Ollama (Local)</option>
                 </select>
               </label>
               <label>
@@ -299,6 +317,7 @@
                   <option value="openai">OpenAI</option>
                   <option value="claude">Claude</option>
                   <option value="openrouter">OpenRouter</option>
+                  <option value="ollama">Ollama (Local)</option>
                 </select>
               </label>
               <label>
@@ -326,8 +345,8 @@
           <h2>Settings</h2>
         </div>
         <button type="button" class="settings-nav-btn active" data-target="panel-keys">API Keys</button>
+        <button type="button" class="settings-nav-btn" data-target="panel-local">Local Models</button>
         <button type="button" class="settings-nav-btn" data-target="panel-skills">Skills</button>
-        <button type="button" class="settings-nav-btn" data-target="panel-ai">AI Config</button>
       </div>
 
       <div class="settings-content">
@@ -358,6 +377,24 @@
           </div>
         </div>
 
+        <div id="panel-local" class="settings-panel" hidden>
+          <p class="panel-desc">Run AI fully locally with Ollama — free, private, offline. Pick Ollama (Local) in the AI dropdown to use a downloaded model instead of a paid API.</p>
+
+          <div class="ollama-status-row">
+            <span id="ollama-status-dot" class="ollama-dot" aria-hidden="true"></span>
+            <span id="ollama-status-text">Checking for Ollama…</span>
+            <a id="ollama-install-link" href="https://ollama.com/download" target="_blank" rel="noreferrer" class="text-btn" hidden>Get Ollama</a>
+            <button type="button" id="ollama-refresh-btn" class="test-btn">Refresh</button>
+          </div>
+
+          <h3 class="local-section-title">Recommended for CAD</h3>
+          <div id="ollama-recommended" class="ollama-model-list"></div>
+
+          <h3 class="local-section-title">Downloaded on this machine</h3>
+          <div id="ollama-installed" class="ollama-model-list"></div>
+          <div id="ollama-local-note" class="settings-note" hidden></div>
+        </div>
+
         <div id="panel-skills" class="settings-panel" hidden>
           <div class="panel-header-row">
             <p class="panel-desc">Add custom instructions to shape the agent's behavior. Max 2 active at once.</p>
@@ -380,94 +417,7 @@
           </div>
         </div>
 
-        <div id="panel-ai" class="settings-panel" hidden>
-          <p class="panel-desc">Tune the agent's behavior and set CAD defaults.</p>
-          <form id="ai-config-form" class="ai-config-form">
-            
-            <div class="config-row">
-              <label>
-                <div class="config-label">
-                  <span>Quality Mode</span>
-                  <small>Preset profiles for speed vs reasoning</small>
-                </div>
-                <div class="ai-radio-group">
-                  <label><input type="radio" name="qualityMode" value="fast"> Fast</label>
-                  <label><input type="radio" name="qualityMode" value="balanced" checked> Balanced</label>
-                  <label><input type="radio" name="qualityMode" value="thorough"> Thorough</label>
-                </div>
-              </label>
-            </div>
-
-            <div class="config-row">
-              <label>
-                <div class="config-label">
-                  <span>Temperature (<span id="temp-val">0.1</span>)</span>
-                  <small>Creativity vs precision</small>
-                </div>
-                <input type="range" id="ai-temp" min="0" max="1" step="0.05" value="0.1" class="ai-slider">
-              </label>
-            </div>
-
-            <div class="config-row">
-              <label>
-                <div class="config-label">
-                  <span>Max Iterations (<span id="iter-val">8</span>)</span>
-                  <small>How many times the agent can retry fixes</small>
-                </div>
-                <input type="range" id="ai-iter" min="1" max="12" step="1" value="8" class="ai-slider">
-              </label>
-            </div>
-
-            <div class="config-row">
-              <label>
-                <div class="config-label">
-                  <span>Wall Thickness (<span id="wall-val">3</span> mm)</span>
-                  <small>Default thickness for hollow parts</small>
-                </div>
-                <input type="range" id="ai-wall" min="0.1" max="10" step="0.1" value="3" class="ai-slider">
-              </label>
-            </div>
-
-            <div class="config-row">
-              <label>
-                <div class="config-label">
-                  <span>Cut Tolerance (<span id="tol-val">1</span> mm)</span>
-                  <small>Boolean cut overshoot distance</small>
-                </div>
-                <input type="range" id="ai-tol" min="0.1" max="5" step="0.1" value="1" class="ai-slider">
-              </label>
-            </div>
-
-            <div class="config-row">
-              <label>
-                <div class="config-label">
-                  <span>Fillet Strategy</span>
-                  <small>Controls how fillets are applied</small>
-                </div>
-                <select id="ai-fillet" class="ai-select">
-                  <option value="conservative">Conservative</option>
-                  <option value="moderate" selected>Moderate</option>
-                  <option value="aggressive">Aggressive</option>
-                </select>
-              </label>
-            </div>
-
-            <div class="config-row">
-              <label>
-                <div class="config-label">
-                  <span>Pre-prompt Instructions</span>
-                  <small>Custom instruction prepended to every prompt</small>
-                </div>
-                <textarea id="ai-preprompt" class="ai-textarea" rows="3" placeholder="e.g. Always use imperial units..."></textarea>
-              </label>
-            </div>
-            
-            <div class="modal-actions">
-              <div id="ai-note" class="settings-note"></div>
-              <button type="submit" class="save-btn">Save Config</button>
-            </div>
-          </form>
-        </div>
+        
       </div>
     </div>
   </div>
