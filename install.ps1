@@ -7,6 +7,13 @@
 
 $ErrorActionPreference = "Stop"
 $Repo = "pulakit001/cadara-text-to-cad"
+# Guard: this script is Windows-only. Running it under PowerShell on macOS
+# or Linux would download a Windows .exe and then fail cryptically with
+# "Permission denied" when Start-Process tries to execute the binary.
+# Fail fast and point the user at the right installer instead.
+if ($PSVersionTable.Platform -and $PSVersionTable.Platform -ne 'Win32NT') {
+  throw "This is the Windows installer, but you're on $([System.Runtime.InteropServices.RuntimeInformation]::OSDescription.Trim()). `nUse the macOS/Linux installer instead: `n  irm https://raw.githubusercontent.com/$Repo/main/install.sh | bash"
+}
 
 function Step($m) { Write-Host "`n==> $m" -ForegroundColor Cyan }
 function Info($m) { Write-Host "    $m" -ForegroundColor DarkGray }
